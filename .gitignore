@@ -48,5 +48,5 @@ src/lib/runtime.ts
 public/manifest.json
 
 # Local test credentials and private import datasets
-/测试交接.md
+/docs/需求与部署/测试交接-本机私密.md
 /docs/imports/

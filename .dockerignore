@@ -11,4 +11,4 @@ coverage
 *.tsbuildinfo
 docker-compose*.yml
 docs/imports
-测试交接.md
+**/*本机私密*
