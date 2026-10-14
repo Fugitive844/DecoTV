@@ -136,7 +136,7 @@ describe('audit routes', () => {
       addSearchAudit: jest.fn(async () => undefined),
       getSearchHistory: jest.fn(async () => ['三体']),
       deleteSearchHistory: jest.fn(async () => undefined),
-      getAuditUsers: jest.fn(async () => ['alice']),
+      getAuditUsers: jest.fn(async () => ['alice', 'ghost']),
       getPlayAudits: jest.fn(async () => []),
       getSearchAudits: jest.fn(async () => ({ total: 0, items: [] })),
     };
@@ -251,7 +251,12 @@ describe('audit routes', () => {
     );
     expect(asOwner.status).toBe(200);
     expect(await asOwner.json()).toMatchObject({
-      users: [{ username: 'alice', playCount: 0, searchCount: 0 }],
+      users: [
+        { username: 'admin', playCount: 0, searchCount: 0, deleted: false },
+        { username: 'alice', playCount: 0, searchCount: 0, deleted: false },
+        { username: 'ghost', deleted: true },
+        { username: 'manager', playCount: 0, searchCount: 0, deleted: false },
+      ],
     });
 
     const plays = await route.GET(
@@ -262,5 +267,51 @@ describe('audit routes', () => {
     );
     expect(plays.status).toBe(200);
     expect(mockDb.getPlayAudits).toHaveBeenCalledWith('alice');
+  });
+
+  it('merges audits of all users when no username is given', async () => {
+    const route = loadRoute('../src/app/api/admin/audit/route');
+    mockDb.getPlayAudits.mockImplementation(async (name) =>
+      name === 'alice'
+        ? [{ key: 'src+1', title: 'A', last_play_time: 100 }]
+        : [{ key: 'src+1', title: 'A', last_play_time: 200 }],
+    );
+    mockDb.getSearchAudits.mockImplementation(async (name, offset, limit) => {
+      const all =
+        name === 'alice'
+          ? [
+              { keyword: 'a2', time: 40 },
+              { keyword: 'a1', time: 10 },
+            ]
+          : [{ keyword: 'g1', time: 30 }];
+      return { total: all.length, items: all.slice(offset, offset + limit) };
+    });
+
+    const plays = await route.GET(
+      createRequest('http://localhost/api/admin/audit?type=play', {
+        username: 'admin',
+      }),
+    );
+    expect(await plays.json()).toMatchObject({
+      total: 2,
+      items: [
+        { username: 'ghost', last_play_time: 200 },
+        { username: 'alice', last_play_time: 100 },
+      ],
+    });
+
+    const searches = await route.GET(
+      createRequest(
+        'http://localhost/api/admin/audit?type=search&offset=1&limit=2',
+        { username: 'admin' },
+      ),
+    );
+    expect(await searches.json()).toEqual({
+      total: 3,
+      items: [
+        { keyword: 'g1', time: 30, username: 'ghost' },
+        { keyword: 'a1', time: 10, username: 'alice' },
+      ],
+    });
   });
 });
