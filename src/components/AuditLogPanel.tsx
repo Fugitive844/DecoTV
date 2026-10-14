@@ -12,7 +12,11 @@ interface AuditUserSummary {
   deleted: boolean;
 }
 
+// 接口返回的每条审计都带上所属用户名，便于“全部用户”视图展示
+type WithUser<T> = T & { username?: string };
+
 const SEARCH_PAGE_SIZE = 50;
+const ALL_USERS = '';
 
 function formatDateTime(timestamp: number): string {
   if (!timestamp) return '-';
@@ -60,10 +64,10 @@ async function fetchJson<T>(url: string): Promise<T> {
 
 const AuditLogPanel = () => {
   const [users, setUsers] = useState<AuditUserSummary[]>([]);
-  const [selectedUser, setSelectedUser] = useState('');
+  const [selectedUser, setSelectedUser] = useState(ALL_USERS);
   const [view, setView] = useState<'play' | 'search'>('play');
-  const [plays, setPlays] = useState<PlayAuditEntry[]>([]);
-  const [searches, setSearches] = useState<SearchAuditEntry[]>([]);
+  const [plays, setPlays] = useState<WithUser<PlayAuditEntry>[]>([]);
+  const [searches, setSearches] = useState<WithUser<SearchAuditEntry>[]>([]);
   const [searchTotal, setSearchTotal] = useState(0);
   const [isLocalMode, setIsLocalMode] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -79,10 +83,11 @@ const AuditLogPanel = () => {
       }>('/api/admin/audit');
       setIsLocalMode(data.storageMode === 'local');
       setUsers(data.users || []);
+      // 选中的用户已不在列表中时回到全部用户
       setSelectedUser((current) =>
-        current && data.users.some((user) => user.username === current)
+        data.users?.some((user) => user.username === current)
           ? current
-          : data.users[0]?.username || '',
+          : ALL_USERS,
       );
     } catch (err) {
       setError((err as Error).message);
@@ -93,21 +98,23 @@ const AuditLogPanel = () => {
 
   const loadDetail = useCallback(
     async (username: string, type: 'play' | 'search', offset = 0) => {
-      if (!username) return;
       setLoading(true);
       setError('');
-      const base = `/api/admin/audit?username=${encodeURIComponent(username)}`;
+      // 不传 username 表示查询全部用户
+      const base = username
+        ? `/api/admin/audit?username=${encodeURIComponent(username)}&`
+        : '/api/admin/audit?';
       try {
         if (type === 'play') {
-          const data = await fetchJson<{ items: PlayAuditEntry[] }>(
-            `${base}&type=play`,
+          const data = await fetchJson<{ items: WithUser<PlayAuditEntry>[] }>(
+            `${base}type=play`,
           );
           setPlays(data.items || []);
         } else {
           const data = await fetchJson<{
             total: number;
-            items: SearchAuditEntry[];
-          }>(`${base}&type=search&offset=${offset}&limit=${SEARCH_PAGE_SIZE}`);
+            items: WithUser<SearchAuditEntry>[];
+          }>(`${base}type=search&offset=${offset}&limit=${SEARCH_PAGE_SIZE}`);
           setSearchTotal(data.total || 0);
           setSearches((current) =>
             offset === 0
@@ -146,6 +153,10 @@ const AuditLogPanel = () => {
     );
   }
 
+  const showUserColumn = selectedUser === ALL_USERS;
+  const totalPlays = users.reduce((sum, user) => sum + user.playCount, 0);
+  const totalSearches = users.reduce((sum, user) => sum + user.searchCount, 0);
+
   const tabClass = (active: boolean) =>
     `px-3 py-1.5 text-sm rounded-lg transition-colors ${
       active
@@ -166,7 +177,9 @@ const AuditLogPanel = () => {
           onChange={(event) => setSelectedUser(event.target.value)}
           className='min-w-0 max-w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100'
         >
-          {users.length === 0 && <option value=''>暂无审计数据</option>}
+          <option value={ALL_USERS}>
+            全部用户 · 播放 {totalPlays} · 搜索 {totalSearches}
+          </option>
           {users.map((user) => (
             <option key={user.username} value={user.username}>
               {user.username}
@@ -201,11 +214,14 @@ const AuditLogPanel = () => {
         <p className='text-sm text-red-600 dark:text-red-400'>{error}</p>
       )}
 
-      {selectedUser && view === 'play' && (
+      {view === 'play' && (
         <div className='border border-gray-200 dark:border-gray-700 rounded-lg max-h-112 overflow-auto'>
           <table className='min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm'>
             <thead className='bg-gray-50 dark:bg-gray-900 sticky top-0 z-10'>
               <tr className='text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase'>
+                {showUserColumn && (
+                  <th className='px-3 py-2 whitespace-nowrap'>用户</th>
+                )}
                 <th className='px-3 py-2'>标题</th>
                 <th className='px-3 py-2'>来源</th>
                 <th className='px-3 py-2 whitespace-nowrap'>集数</th>
@@ -219,7 +235,7 @@ const AuditLogPanel = () => {
               {plays.length === 0 && (
                 <tr>
                   <td
-                    colSpan={7}
+                    colSpan={showUserColumn ? 8 : 7}
                     className='px-3 py-4 text-center text-gray-500 dark:text-gray-400'
                   >
                     {loading ? '加载中...' : '暂无播放审计'}
@@ -228,9 +244,14 @@ const AuditLogPanel = () => {
               )}
               {plays.map((entry) => (
                 <tr
-                  key={entry.key}
+                  key={`${entry.username || ''}/${entry.key}`}
                   className='hover:bg-gray-50 dark:hover:bg-gray-800'
                 >
+                  {showUserColumn && (
+                    <td className='px-3 py-2 whitespace-nowrap'>
+                      {entry.username}
+                    </td>
+                  )}
                   <td
                     className='px-3 py-2 max-w-60 truncate'
                     title={entry.title}
@@ -276,13 +297,16 @@ const AuditLogPanel = () => {
         </div>
       )}
 
-      {selectedUser && view === 'search' && (
+      {view === 'search' && (
         <div className='space-y-2'>
           <div className='border border-gray-200 dark:border-gray-700 rounded-lg max-h-112 overflow-auto'>
             <table className='min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm'>
               <thead className='bg-gray-50 dark:bg-gray-900 sticky top-0 z-10'>
                 <tr className='text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase'>
                   <th className='px-3 py-2 whitespace-nowrap'>搜索时间</th>
+                  {showUserColumn && (
+                    <th className='px-3 py-2 whitespace-nowrap'>用户</th>
+                  )}
                   <th className='px-3 py-2'>关键词</th>
                 </tr>
               </thead>
@@ -290,7 +314,7 @@ const AuditLogPanel = () => {
                 {searches.length === 0 && (
                   <tr>
                     <td
-                      colSpan={2}
+                      colSpan={showUserColumn ? 3 : 2}
                       className='px-3 py-4 text-center text-gray-500 dark:text-gray-400'
                     >
                       {loading ? '加载中...' : '暂无搜索审计'}
@@ -299,12 +323,17 @@ const AuditLogPanel = () => {
                 )}
                 {searches.map((entry, index) => (
                   <tr
-                    key={`${entry.time}-${index}`}
+                    key={`${entry.username || ''}-${entry.time}-${index}`}
                     className='hover:bg-gray-50 dark:hover:bg-gray-800'
                   >
                     <td className='px-3 py-2 whitespace-nowrap'>
                       {formatDateTime(entry.time)}
                     </td>
+                    {showUserColumn && (
+                      <td className='px-3 py-2 whitespace-nowrap'>
+                        {entry.username}
+                      </td>
+                    )}
                     <td className='px-3 py-2 break-all'>{entry.keyword}</td>
                   </tr>
                 ))}
