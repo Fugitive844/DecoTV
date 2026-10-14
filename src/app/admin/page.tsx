@@ -37,6 +37,7 @@ import {
   MessageSquareText,
   Package,
   Settings,
+  ShieldCheck,
   Tv,
   Upload,
   Users,
@@ -64,6 +65,7 @@ import {
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import { DEFAULT_PANSOU_SERVER_URL } from '@/lib/pansou';
 
+import AuditLogPanel from '@/components/AuditLogPanel';
 import DataMigration from '@/components/DataMigration';
 import type { ImportExportModalProps } from '@/components/ImportExportModal';
 import PageLayout from '@/components/PageLayout';
@@ -9848,6 +9850,7 @@ function AdminPageClient() {
     pansouConfig: false,
     privateLibraryConfig: false,
     dataMigration: false,
+    auditLog: false,
   });
 
   // TVBox 配置相关状态
@@ -11078,6 +11081,23 @@ function AdminPageClient() {
                 onToggle={() => toggleTab('dataMigration')}
               >
                 <DataMigration onRefreshConfig={refreshConfigAfterMutation} />
+              </CollapsibleTab>
+            )}
+
+            {/* 审计日志标签 - 仅站长可见 */}
+            {role === 'owner' && (
+              <CollapsibleTab
+                title='审计日志'
+                icon={
+                  <ShieldCheck
+                    size={20}
+                    className='text-gray-600 dark:text-gray-400'
+                  />
+                }
+                isExpanded={expandedTabs.auditLog}
+                onToggle={() => toggleTab('auditLog')}
+              >
+                {expandedTabs.auditLog && <AuditLogPanel />}
               </CollapsibleTab>
             )}
           </div>

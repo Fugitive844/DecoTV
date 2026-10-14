@@ -778,6 +778,16 @@ function PlayPageClient() {
   const initialPrivateConnectorId = searchParams.get('connectorId') || '';
   const initialPrivateSourceItemId = searchParams.get('sourceItemId') || '';
 
+  // 审计回放：站长从审计日志继续播放用户的记录，本次播放不产生任何记录
+  const [isAuditReplay] = useState(searchParams.get('audit') === '1');
+  const auditReplayRef = useRef(isAuditReplay);
+  const auditReplayEpisodeRef = useRef(
+    Math.max(1, Number.parseInt(searchParams.get('auditEp') || '1', 10) || 1),
+  );
+  const auditReplayTimeRef = useRef(
+    Math.max(0, Number(searchParams.get('auditTime') || 0) || 0),
+  );
+
   // 搜索所需信息
   const [searchTitle] = useState(searchParams.get('stitle') || '');
   const [searchType] = useState(searchParams.get('stype') || '');
@@ -2798,7 +2808,12 @@ function PlayPageClient() {
       localStorage.setItem(storageKey, JSON.stringify(newConfig));
 
       if (!newConfig.enable && !newConfig.intro_time && !newConfig.outro_time) {
-        await deleteSkipConfig(currentSourceRef.current, currentIdRef.current);
+        if (!auditReplayRef.current) {
+          await deleteSkipConfig(
+            currentSourceRef.current,
+            currentIdRef.current,
+          );
+        }
         localStorage.removeItem(storageKey);
         showToast('已清除跳过设置', 'info');
         artPlayerRef.current.setting.update({
@@ -2859,11 +2874,13 @@ function PlayPageClient() {
           },
         });
       } else {
-        await saveSkipConfig(
-          currentSourceRef.current,
-          currentIdRef.current,
-          newConfig,
-        );
+        if (!auditReplayRef.current) {
+          await saveSkipConfig(
+            currentSourceRef.current,
+            currentIdRef.current,
+            newConfig,
+          );
+        }
 
         // 显示 Toast 通知
         const introText =
@@ -3135,6 +3152,16 @@ function PlayPageClient() {
     const initFromHistory = async () => {
       if (!currentSource || !currentId) return;
 
+      // 审计回放：使用审计日志中的集数和进度，不读取站长自己的播放记录
+      if (auditReplayRef.current) {
+        const targetIndex = auditReplayEpisodeRef.current - 1;
+        if (targetIndex !== currentEpisodeIndex) {
+          setCurrentEpisodeIndex(targetIndex);
+        }
+        resumeTimeRef.current = auditReplayTimeRef.current;
+        return;
+      }
+
       try {
         const allRecords = await getAllPlayRecords();
         const storageSource = getPlayRecordStorageSource(
@@ -3212,7 +3239,11 @@ function PlayPageClient() {
       console.log('换源前当前播放时间:', currentPlayTime);
 
       // 清除前一个历史记录
-      if (currentSourceRef.current && currentIdRef.current) {
+      if (
+        !auditReplayRef.current &&
+        currentSourceRef.current &&
+        currentIdRef.current
+      ) {
         try {
           const previousStorageSource = getPlayRecordStorageSource(
             currentSourceRef.current,
@@ -3226,7 +3257,11 @@ function PlayPageClient() {
       }
 
       // 清除并设置下一个跳过片头片尾配置
-      if (currentSourceRef.current && currentIdRef.current) {
+      if (
+        !auditReplayRef.current &&
+        currentSourceRef.current &&
+        currentIdRef.current
+      ) {
         try {
           await deleteSkipConfig(
             currentSourceRef.current,
@@ -3529,6 +3564,11 @@ function PlayPageClient() {
   // ---------------------------------------------------------------------------
   // 保存播放进度
   const saveCurrentPlayProgress = async () => {
+    // 审计回放不保存进度，避免覆盖用户日志或产生站长记录
+    if (auditReplayRef.current) {
+      return;
+    }
+
     if (
       !artPlayerRef.current ||
       !currentSourceRef.current ||
@@ -3598,6 +3638,7 @@ function PlayPageClient() {
     force = false,
   ) => {
     if (
+      auditReplayRef.current ||
       !isPrivateLibrarySource(currentSourceRef.current) ||
       !artPlayerRef.current
     ) {
@@ -4849,6 +4890,11 @@ function PlayPageClient() {
   return (
     <PageLayout activePath='/play'>
       <div className='flex flex-col gap-3 py-4 px-5 lg:px-12 2xl:px-20'>
+        {isAuditReplay && (
+          <div className='rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300'>
+            审计回放模式：本次播放不会产生任何播放记录或审计日志
+          </div>
+        )}
         {/* 第一行：影片标题 */}
         <div className='py-1 flex justify-between items-center gap-2'>
           <h1 className='text-xl font-semibold text-gray-900 dark:text-gray-100 truncate'>

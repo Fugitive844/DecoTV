@@ -7,7 +7,9 @@ import { RedisStorage } from './redis.db';
 import {
   Favorite,
   IStorage,
+  PlayAuditEntry,
   PlayRecord,
+  SearchAuditEntry,
   SkipConfig,
   SkipPreset,
 } from './types';
@@ -275,6 +277,48 @@ export class DbManager {
     if (typeof (this.storage as any).setSkipPresets === 'function') {
       await (this.storage as any).setSkipPresets(userName, presets);
     }
+  }
+
+  // ---------- 合规审计 ----------
+  async upsertPlayAudit(
+    userName: string,
+    key: string,
+    record: PlayRecord,
+  ): Promise<void> {
+    if (typeof this.storage.upsertPlayAudit === 'function') {
+      await this.storage.upsertPlayAudit(userName, key, record);
+    }
+  }
+
+  async getPlayAudits(userName: string): Promise<PlayAuditEntry[]> {
+    if (typeof this.storage.getPlayAudits === 'function') {
+      return this.storage.getPlayAudits(userName);
+    }
+    return [];
+  }
+
+  async addSearchAudit(userName: string, keyword: string): Promise<void> {
+    if (typeof this.storage.addSearchAudit === 'function') {
+      await this.storage.addSearchAudit(userName, keyword);
+    }
+  }
+
+  async getSearchAudits(
+    userName: string,
+    offset: number,
+    limit: number,
+  ): Promise<{ total: number; items: SearchAuditEntry[] }> {
+    if (typeof this.storage.getSearchAudits === 'function') {
+      return this.storage.getSearchAudits(userName, offset, limit);
+    }
+    return { total: 0, items: [] };
+  }
+
+  async getAuditUsers(): Promise<string[]> {
+    if (typeof this.storage.getAuditUsers === 'function') {
+      return this.storage.getAuditUsers();
+    }
+    return [];
   }
 
   // ---------- 数据清理 ----------

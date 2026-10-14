@@ -4,9 +4,21 @@ import { Redis } from '@upstash/redis';
 
 import { AdminConfig } from './admin.types';
 import {
+  AUDIT_USERS_KEY,
+  buildPlayAuditEntry,
+  buildSearchAuditEntry,
+  parseAuditValue,
+  playAuditKey,
+  SEARCH_AUDIT_LIMIT,
+  searchAuditKey,
+  sortPlayAudits,
+} from './audit';
+import {
   Favorite,
   IStorage,
+  PlayAuditEntry,
   PlayRecord,
+  SearchAuditEntry,
   SkipConfig,
   SkipPreset,
 } from './types';
@@ -380,6 +392,65 @@ export class UpstashRedisStorage implements IStorage {
     await withRetry(() =>
       this.client.set(this.skipPresetKey(userName), presets),
     );
+  }
+
+  // ---------- 合规审计 ----------
+  async upsertPlayAudit(
+    userName: string,
+    key: string,
+    record: PlayRecord,
+  ): Promise<void> {
+    const hashKey = playAuditKey(userName);
+    const previous = parseAuditValue<PlayAuditEntry>(
+      await withRetry(() => this.client.hget(hashKey, key)),
+    );
+    const entry = buildPlayAuditEntry(key, record, previous);
+    await withRetry(() =>
+      this.client.hset(hashKey, { [key]: JSON.stringify(entry) }),
+    );
+    await withRetry(() => this.client.sadd(AUDIT_USERS_KEY, userName));
+  }
+
+  async getPlayAudits(userName: string): Promise<PlayAuditEntry[]> {
+    const all = await withRetry(() =>
+      this.client.hgetall<Record<string, unknown>>(playAuditKey(userName)),
+    );
+    const entries = Object.values(all || {})
+      .map((raw) => parseAuditValue<PlayAuditEntry>(raw))
+      .filter((entry): entry is PlayAuditEntry => Boolean(entry));
+    return sortPlayAudits(entries);
+  }
+
+  async addSearchAudit(userName: string, keyword: string): Promise<void> {
+    const listKey = searchAuditKey(userName);
+    const entry = buildSearchAuditEntry(keyword);
+    await withRetry(() => this.client.lpush(listKey, JSON.stringify(entry)));
+    await withRetry(() =>
+      this.client.ltrim(listKey, 0, SEARCH_AUDIT_LIMIT - 1),
+    );
+    await withRetry(() => this.client.sadd(AUDIT_USERS_KEY, userName));
+  }
+
+  async getSearchAudits(
+    userName: string,
+    offset: number,
+    limit: number,
+  ): Promise<{ total: number; items: SearchAuditEntry[] }> {
+    const listKey = searchAuditKey(userName);
+    const total = await withRetry(() => this.client.llen(listKey));
+    if (limit <= 0 || offset >= total) return { total, items: [] };
+    const raw = await withRetry(() =>
+      this.client.lrange(listKey, offset, offset + limit - 1),
+    );
+    const items = (raw as unknown[])
+      .map((value) => parseAuditValue<SearchAuditEntry>(value))
+      .filter((entry): entry is SearchAuditEntry => Boolean(entry));
+    return { total, items };
+  }
+
+  async getAuditUsers(): Promise<string[]> {
+    const users = await withRetry(() => this.client.smembers(AUDIT_USERS_KEY));
+    return ensureStringArray(users as any[]);
   }
 
   // 清空所有数据

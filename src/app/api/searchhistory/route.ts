@@ -90,6 +90,13 @@ export async function POST(request: NextRequest) {
 
     await db.addSearchHistory(auth.username, keyword);
 
+    // 合规审计：每次搜索一条，用户删除搜索历史不影响；失败不影响正常保存
+    try {
+      await db.addSearchAudit(auth.username, keyword);
+    } catch (auditError) {
+      console.error('写入搜索审计失败', auditError);
+    }
+
     // 再次获取最新列表，确保客户端与服务端同步
     const history = await db.getSearchHistory(auth.username);
     return NextResponse.json(history.slice(0, HISTORY_LIMIT), { status: 200 });
