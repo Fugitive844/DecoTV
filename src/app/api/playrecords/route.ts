@@ -136,10 +136,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    await db.savePlayRecord(auth.username, source, id, {
+    const savedRecord = {
       ...record,
       save_time: record.save_time ?? Date.now(),
-    });
+    };
+    await db.savePlayRecord(auth.username, source, id, savedRecord);
+
+    // 合规审计：独立保存，用户删除播放记录不影响；失败不影响正常保存
+    try {
+      await db.upsertPlayAudit(auth.username, `${source}+${id}`, savedRecord);
+    } catch (auditError) {
+      console.error('Failed to write play audit', auditError);
+    }
 
     return NextResponse.json(
       { success: true },

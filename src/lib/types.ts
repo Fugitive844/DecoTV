@@ -14,6 +14,21 @@ export interface PlayRecord {
   search_title: string; // 搜索时使用的标题
 }
 
+// 播放审计记录：同一用户同一视频（source+id）只保留一条，用户删除播放记录不影响
+export interface PlayAuditEntry extends PlayRecord {
+  key: string; // source+id
+  source: string;
+  id: string;
+  first_play_time: number; // 首次观看时间（时间戳）
+  last_play_time: number; // 最近观看时间（时间戳）
+}
+
+// 搜索审计记录：每次搜索一条
+export interface SearchAuditEntry {
+  keyword: string;
+  time: number;
+}
+
 // 收藏数据结构
 export interface Favorite {
   source_name: string;
@@ -84,6 +99,21 @@ export interface IStorage {
   // 跳过预设组（可选实现，未实现时由上层降级）
   getSkipPresets?(userName: string): Promise<SkipPreset[]>;
   setSkipPresets?(userName: string, presets: SkipPreset[]): Promise<void>;
+
+  // 合规审计（可选实现）：独立于用户数据，用户删除历史或删除用户时保留
+  upsertPlayAudit?(
+    userName: string,
+    key: string,
+    record: PlayRecord,
+  ): Promise<void>;
+  getPlayAudits?(userName: string): Promise<PlayAuditEntry[]>;
+  addSearchAudit?(userName: string, keyword: string): Promise<void>;
+  getSearchAudits?(
+    userName: string,
+    offset: number,
+    limit: number,
+  ): Promise<{ total: number; items: SearchAuditEntry[] }>;
+  getAuditUsers?(): Promise<string[]>;
 
   // 数据清理相关
   clearAllData(): Promise<void>;

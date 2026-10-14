@@ -10,9 +10,17 @@
 
 import { AdminConfig } from './admin.types';
 import {
+  buildPlayAuditEntry,
+  buildSearchAuditEntry,
+  SEARCH_AUDIT_LIMIT,
+  sortPlayAudits,
+} from './audit';
+import {
   Favorite,
   IStorage,
+  PlayAuditEntry,
   PlayRecord,
+  SearchAuditEntry,
   SkipConfig,
   SkipPreset,
 } from './types';
@@ -26,6 +34,9 @@ export class MemoryStorage implements IStorage {
   private adminConfig: AdminConfig | null = null;
   private skipConfigs: Map<string, Map<string, SkipConfig>> = new Map();
   private skipPresets: Map<string, SkipPreset[]> = new Map();
+  // 审计数据独立保存，deleteUser / clearAllData 不清除
+  private playAudits: Map<string, Map<string, PlayAuditEntry>> = new Map();
+  private searchAudits: Map<string, SearchAuditEntry[]> = new Map();
 
   constructor() {
     console.log('[MemoryStorage] 内存存储已初始化（本地模式）');
@@ -244,6 +255,51 @@ export class MemoryStorage implements IStorage {
 
   async setSkipPresets(userName: string, presets: SkipPreset[]): Promise<void> {
     this.skipPresets.set(userName, [...presets]);
+  }
+
+  // ========== 合规审计 ==========
+  async upsertPlayAudit(
+    userName: string,
+    key: string,
+    record: PlayRecord,
+  ): Promise<void> {
+    if (!this.playAudits.has(userName)) {
+      this.playAudits.set(userName, new Map());
+    }
+    const userAudits = this.playAudits.get(userName)!;
+    userAudits.set(
+      key,
+      buildPlayAuditEntry(key, record, userAudits.get(key) || null),
+    );
+  }
+
+  async getPlayAudits(userName: string): Promise<PlayAuditEntry[]> {
+    const userAudits = this.playAudits.get(userName);
+    return userAudits ? sortPlayAudits(Array.from(userAudits.values())) : [];
+  }
+
+  async addSearchAudit(userName: string, keyword: string): Promise<void> {
+    const list = this.searchAudits.get(userName) || [];
+    list.unshift(buildSearchAuditEntry(keyword));
+    this.searchAudits.set(userName, list.slice(0, SEARCH_AUDIT_LIMIT));
+  }
+
+  async getSearchAudits(
+    userName: string,
+    offset: number,
+    limit: number,
+  ): Promise<{ total: number; items: SearchAuditEntry[] }> {
+    const list = this.searchAudits.get(userName) || [];
+    return {
+      total: list.length,
+      items: limit > 0 ? list.slice(offset, offset + limit) : [],
+    };
+  }
+
+  async getAuditUsers(): Promise<string[]> {
+    return Array.from(
+      new Set([...this.playAudits.keys(), ...this.searchAudits.keys()]),
+    );
   }
 
   // ========== 数据清理 ==========
