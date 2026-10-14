@@ -46,3 +46,7 @@ sitemap-*.xml
 # generated files
 src/lib/runtime.ts
 public/manifest.json
+
+# Local test credentials and private import datasets
+/测试交接.md
+/docs/imports/

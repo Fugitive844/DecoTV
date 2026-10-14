@@ -41,6 +41,7 @@ export interface VideoCardProps {
   title?: string;
   query?: string;
   poster?: string;
+  posterCandidates?: string[];
   episodes?: number;
   source_name?: string;
   source_names?: string[];
@@ -73,6 +74,7 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
       title = '',
       query = '',
       poster = '',
+      posterCandidates,
       episodes,
       source,
       source_name,
@@ -700,7 +702,8 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
               - 优化响应式图片加载，避免下载过大图片
             */}
             <ExternalImage
-              src={processedPoster}
+              src={actualPoster}
+              alternateSrcs={posterCandidates}
               alt={actualTitle}
               fill
               className={`${

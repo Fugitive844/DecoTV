@@ -1,0 +1,18 @@
+services:
+  kvrocks:
+    image: apache/kvrocks:latest
+    container_name: decotv-local-kvrocks
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:16379:6666'
+    command:
+      - '--bind'
+      - '0.0.0.0'
+      - '--requirepass'
+      - '${KVROCKS_PASSWORD:?请在 .env.development.local 设置数据库密码}'
+    volumes:
+      - kvrocks-data:/var/lib/kvrocks
+
+volumes:
+  kvrocks-data:
+    name: decotv-local-kvrocks-data

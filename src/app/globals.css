@@ -861,8 +861,32 @@ html[data-render-mode='lite'] .bg-animated-gradient::before {
 }
 
 html[data-render-mode='lite'] .image-placeholder-shimmer,
-html[data-render-mode='lite'] .animate-pulse {
-  animation: none;
+html[data-render-mode='lite'] .animate-pulse,
+html[data-render-mode='lite'] .animate-ping,
+html[data-render-mode='lite'] .deco-brand,
+html[data-render-mode='lite'] .neon-gradient-text,
+html[data-render-mode='lite'] .animate-gradient-shift,
+html[data-render-mode='lite'] .animate-float,
+html[data-render-mode='lite'] .animate-float-slow,
+html[data-render-mode='lite'] .animate-float-slower,
+html[data-render-mode='lite'] .animate-blob,
+html[data-render-mode='lite'] .login-card {
+  animation: none !important;
+}
+
+/* 静态色彩保留；去掉持续合成背景的玻璃滤镜，减轻滚动时 GPU 压力。 */
+html[data-render-mode='lite'] [class*='backdrop-blur'],
+html[data-render-mode='lite'] .glass-chip {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+html[data-render-mode='lite'] .deco-nav-surface {
+  background-color: rgb(255 255 255 / 96%);
+}
+
+html.dark[data-render-mode='lite'] .deco-nav-surface {
+  background-color: rgb(17 24 39 / 96%);
 }
 
 html[data-render-mode='lite'] .video-card-root {

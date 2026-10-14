@@ -1,2 +1,14 @@
-.env
-.env*.local
+.env*
+.git
+.github
+.idea
+.tmp
+.next
+node_modules
+.pnpm-store
+coverage
+*.log
+*.tsbuildinfo
+docker-compose*.yml
+docs/imports
+测试交接.md

@@ -45,7 +45,14 @@ import {
 import { GripVertical } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
-import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { createPortal } from 'react-dom';
 
 import {
@@ -72,6 +79,35 @@ const PanSouConfigPanel = dynamic<PanSouConfigPanelProps>(
 );
 
 // 统一按钮样式系统
+// 稳定的组件类型，父列表更新时不再卸载全部可拖拽行。
+function SortableTableRow({
+  id,
+  children,
+}: {
+  id: string;
+  children: React.ReactNode;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition } =
+    useSortable({ id });
+  return (
+    <tr
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className='hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors select-none'
+    >
+      <td
+        className='px-2 py-4 cursor-grab text-gray-400'
+        style={{ touchAction: 'none' }}
+        {...attributes}
+        {...listeners}
+      >
+        <GripVertical size={16} />
+      </td>
+      {children}
+    </tr>
+  );
+}
+
 const buttonStyles = {
   // 主要操作按钮（蓝色）- 用于配置、设置、确认等
   primary:
@@ -2767,6 +2803,13 @@ const VideoSourceConfig = ({
   const { alertModal, showAlert, hideAlert } = useAlertModal();
   const { isLoading, withLoading } = useLoadingState();
   const [sources, setSources] = useState<DataSource[]>([]);
+  const [sourcePage, setSourcePage] = useState(1);
+  const sourcePageCount = Math.max(1, Math.ceil(sources.length / 50));
+  const safeSourcePage = Math.min(sourcePage, sourcePageCount);
+  const visibleSources = sources.slice(
+    (safeSourcePage - 1) * 50,
+    safeSourcePage * 50,
+  );
   const [showAddForm, setShowAddForm] = useState(false);
   const [orderChanged, setOrderChanged] = useState(false);
   const [newSource, setNewSource] = useState<DataSource>({
@@ -3163,6 +3206,9 @@ const VideoSourceConfig = ({
     }
   };
 
+  const validationCleanup = useRef<(() => void) | null>(null);
+  useEffect(() => () => validationCleanup.current?.(), []);
+
   // 有效性检测函数
   const handleValidateSources = async () => {
     if (!searchKeyword.trim()) {
@@ -3175,6 +3221,7 @@ const VideoSourceConfig = ({
     }
 
     await withLoading('validateSources', async () => {
+      validationCleanup.current?.();
       setIsValidating(true);
       setValidationResults([]); // 清空之前的结果
       setShowValidationModal(false); // 立即关闭弹窗
@@ -3197,6 +3244,40 @@ const VideoSourceConfig = ({
           )}`,
         );
 
+        const sourceNames = new Map(
+          sources.map((source) => [source.key, source.name]),
+        );
+        const pending = new Map<string, (typeof validationResults)[number]>();
+        let flushTimer: ReturnType<typeof setTimeout> | undefined;
+        let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+        const flushResults = () => {
+          clearTimeout(flushTimer);
+          flushTimer = undefined;
+          if (!pending.size) return;
+          const updates = new Map(pending);
+          pending.clear();
+          setValidationResults((previous) => {
+            const keys = new Set(previous.map((result) => result.key));
+            return [
+              ...previous.map((result) => updates.get(result.key) || result),
+              ...[...updates.values()].filter(
+                (result) => !keys.has(result.key),
+              ),
+            ];
+          });
+        };
+        const finish = () => {
+          flushResults();
+          clearTimeout(timeoutTimer);
+          finish();
+        };
+        validationCleanup.current = () => {
+          clearTimeout(flushTimer);
+          clearTimeout(timeoutTimer);
+          eventSource.close();
+          pending.clear();
+        };
+
         eventSource.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
@@ -3211,59 +3292,32 @@ const VideoSourceConfig = ({
 
               case 'source_result':
               case 'source_error':
-                // 更新验证结果
-                setValidationResults((prev) => {
-                  const existing = prev.find((r) => r.key === data.source);
-                  const message =
+                pending.set(data.source, {
+                  key: data.source,
+                  name: sourceNames.get(data.source) || data.source,
+                  status: data.status,
+                  message:
                     data.message ||
                     (data.status === 'valid'
                       ? '搜索正常'
                       : data.status === 'no_results'
                         ? '无法搜索到结果'
-                        : '连接失败');
-                  const resultCount =
+                        : '连接失败'),
+                  resultCount:
                     typeof data.resultCount === 'number'
                       ? data.resultCount
                       : data.status === 'valid'
                         ? 1
-                        : 0;
-                  if (existing) {
-                    return prev.map((r) =>
-                      r.key === data.source
-                        ? {
-                            key: data.source,
-                            name:
-                              sources.find((s) => s.key === data.source)
-                                ?.name || data.source,
-                            status: data.status,
-                            message,
-                            resultCount,
-                          }
-                        : r,
-                    );
-                  } else {
-                    return [
-                      ...prev,
-                      {
-                        key: data.source,
-                        name:
-                          sources.find((s) => s.key === data.source)?.name ||
-                          data.source,
-                        status: data.status,
-                        message,
-                        resultCount,
-                      },
-                    ];
-                  }
+                        : 0,
                 });
+                if (!flushTimer) flushTimer = setTimeout(flushResults, 200);
                 break;
 
               case 'complete':
                 console.log(
                   `检测完成，共检测 ${data.completedSources} 个视频源`,
                 );
-                eventSource.close();
-                setIsValidating(false);
+                finish();
                 break;
             }
           } catch (error) {
@@ -3283,10 +3337,9 @@ const VideoSourceConfig = ({
         };
 
         // 设置超时，防止长时间等待
-        setTimeout(() => {
-          if (eventSource.readyState === EventSource.OPEN) {
-            eventSource.close();
-            setIsValidating(false);
+        timeoutTimer = setTimeout(() => {
+          if (eventSource.readyState !== EventSource.CLOSED) {
+            finish();
             showAlert({
               type: 'warning',
               title: '验证超时',
@@ -3597,8 +3650,12 @@ const VideoSourceConfig = ({
   };
 
   // 获取有效性状态显示
+  const validationByKey = useMemo(
+    () => new Map(validationResults.map((result) => [result.key, result])),
+    [validationResults],
+  );
   const getValidationStatus = (sourceKey: string) => {
-    const result = validationResults.find((r) => r.key === sourceKey);
+    const result = validationByKey.get(sourceKey);
     if (!result) return null;
 
     switch (result.status) {
@@ -3640,177 +3697,155 @@ const VideoSourceConfig = ({
   };
 
   // 可拖拽行封装 (dnd-kit)
-  const DraggableRow = ({ source }: { source: DataSource }) => {
-    const { attributes, listeners, setNodeRef, transform, transition } =
-      useSortable({ id: source.key });
-
-    const style = {
-      transform: CSS.Transform.toString(transform),
-      transition,
-    } as React.CSSProperties;
-
-    return (
-      <tr
-        ref={setNodeRef}
-        style={style}
-        className='hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors select-none'
+  const renderRow = (source: DataSource) => (
+    <SortableTableRow key={source.key} id={source.key}>
+      <td className='px-2 py-4 text-center'>
+        <input
+          type='checkbox'
+          checked={selectedSources.has(source.key)}
+          onChange={(e) => handleSelectSource(source.key, e.target.checked)}
+          className='w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600'
+        />
+      </td>
+      <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100'>
+        <div className='flex items-center space-x-2'>
+          <span>{source.name}</span>
+          {source.from === 'config' && (
+            <span
+              className='px-1.5 py-0.5 text-[10px] font-medium rounded bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300'
+              title='系统预设源，不可删除'
+            >
+              预设
+            </span>
+          )}
+        </div>
+      </td>
+      <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100'>
+        {source.key}
+      </td>
+      <td
+        className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100 max-w-48 truncate'
+        title={source.api}
       >
-        <td
-          className='px-2 py-4 cursor-grab text-gray-400'
-          style={{ touchAction: 'none' }}
-          {...attributes}
-          {...listeners}
+        {source.api}
+      </td>
+      <td
+        className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100 max-w-32 truncate'
+        title={source.detail || '-'}
+      >
+        {source.detail || '-'}
+      </td>
+      <td className='px-6 py-4 whitespace-nowrap max-w-4'>
+        <span
+          className={`px-2 py-1 text-xs rounded-full ${
+            !source.disabled
+              ? 'bg-green-100 dark:bg-green-900/20 text-green-800 dark:text-green-300'
+              : 'bg-red-100 dark:bg-red-900/20 text-red-800 dark:text-red-300'
+          }`}
         >
-          <GripVertical size={16} />
-        </td>
-        <td className='px-2 py-4 text-center'>
-          <input
-            type='checkbox'
-            checked={selectedSources.has(source.key)}
-            onChange={(e) => handleSelectSource(source.key, e.target.checked)}
-            className='w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600'
-          />
-        </td>
-        <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100'>
-          <div className='flex items-center space-x-2'>
-            <span>{source.name}</span>
-            {source.from === 'config' && (
-              <span
-                className='px-1.5 py-0.5 text-[10px] font-medium rounded bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300'
-                title='系统预设源，不可删除'
-              >
-                预设
-              </span>
-            )}
-          </div>
-        </td>
-        <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100'>
-          {source.key}
-        </td>
-        <td
-          className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100 max-w-48 truncate'
-          title={source.api}
+          {!source.disabled ? '启用中' : '已禁用'}
+        </span>
+      </td>
+      <td className='px-6 py-4 whitespace-nowrap text-center'>
+        <button
+          onClick={() => handleToggleAdult(source.key)}
+          disabled={isLoading(`toggleAdult_${source.key}`)}
+          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${
+            source.is_adult
+              ? 'bg-linear-to-r from-red-500 to-pink-500'
+              : 'bg-gray-300 dark:bg-gray-600'
+          } ${
+            isLoading(`toggleAdult_${source.key}`)
+              ? 'opacity-50 cursor-not-allowed'
+              : 'cursor-pointer hover:opacity-80'
+          }`}
+          title={source.is_adult ? '成人资源' : '普通资源'}
         >
-          {source.api}
-        </td>
-        <td
-          className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100 max-w-32 truncate'
-          title={source.detail || '-'}
-        >
-          {source.detail || '-'}
-        </td>
-        <td className='px-6 py-4 whitespace-nowrap max-w-4'>
           <span
-            className={`px-2 py-1 text-xs rounded-full ${
-              !source.disabled
-                ? 'bg-green-100 dark:bg-green-900/20 text-green-800 dark:text-green-300'
-                : 'bg-red-100 dark:bg-red-900/20 text-red-800 dark:text-red-300'
+            className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+              source.is_adult ? 'translate-x-5' : 'translate-x-0.5'
             }`}
-          >
-            {!source.disabled ? '启用中' : '已禁用'}
-          </span>
-        </td>
-        <td className='px-6 py-4 whitespace-nowrap text-center'>
-          <button
-            onClick={() => handleToggleAdult(source.key)}
-            disabled={isLoading(`toggleAdult_${source.key}`)}
-            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${
-              source.is_adult
-                ? 'bg-linear-to-r from-red-500 to-pink-500'
-                : 'bg-gray-300 dark:bg-gray-600'
-            } ${
-              isLoading(`toggleAdult_${source.key}`)
-                ? 'opacity-50 cursor-not-allowed'
-                : 'cursor-pointer hover:opacity-80'
+          />
+        </button>
+      </td>
+      <td className='px-6 py-4 whitespace-nowrap text-center'>
+        <button
+          onClick={() => handleToggleAdFilter(source.key)}
+          disabled={isLoading(`toggleAdFilter_${source.key}`)}
+          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${
+            !source.disable_ad_filter
+              ? buttonStyles.toggleOn
+              : buttonStyles.toggleOff
+          } ${
+            isLoading(`toggleAdFilter_${source.key}`)
+              ? 'opacity-50 cursor-not-allowed'
+              : 'cursor-pointer hover:opacity-80'
+          }`}
+          title={
+            source.disable_ad_filter
+              ? '已豁免：该源直连上游，不删广告段'
+              : '已启用：通过 m3u8 过滤代理删除广告段'
+          }
+        >
+          <span
+            className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+              !source.disable_ad_filter ? 'translate-x-5' : 'translate-x-0.5'
             }`}
-            title={source.is_adult ? '成人资源' : '普通资源'}
-          >
-            <span
-              className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                source.is_adult ? 'translate-x-5' : 'translate-x-0.5'
-              }`}
-            />
-          </button>
-        </td>
-        <td className='px-6 py-4 whitespace-nowrap text-center'>
-          <button
-            onClick={() => handleToggleAdFilter(source.key)}
-            disabled={isLoading(`toggleAdFilter_${source.key}`)}
-            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${
-              !source.disable_ad_filter
-                ? buttonStyles.toggleOn
-                : buttonStyles.toggleOff
-            } ${
-              isLoading(`toggleAdFilter_${source.key}`)
-                ? 'opacity-50 cursor-not-allowed'
-                : 'cursor-pointer hover:opacity-80'
-            }`}
-            title={
-              source.disable_ad_filter
-                ? '已豁免：该源直连上游，不删广告段'
-                : '已启用：通过 m3u8 过滤代理删除广告段'
-            }
-          >
-            <span
-              className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                !source.disable_ad_filter ? 'translate-x-5' : 'translate-x-0.5'
-              }`}
-            />
-          </button>
-        </td>
-        <td className='px-6 py-4 whitespace-nowrap max-w-4'>
-          {(() => {
-            const status = getValidationStatus(source.key);
-            if (!status) {
-              return (
-                <span className='px-2 py-1 text-xs rounded-full bg-gray-100 dark:bg-gray-900/20 text-gray-600 dark:text-gray-400'>
-                  未检测
-                </span>
-              );
-            }
+          />
+        </button>
+      </td>
+      <td className='px-6 py-4 whitespace-nowrap max-w-4'>
+        {(() => {
+          const status = getValidationStatus(source.key);
+          if (!status) {
             return (
-              <span
-                className={`px-2 py-1 text-xs rounded-full ${status.className}`}
-                title={status.message}
-              >
-                {status.icon} {status.text}
+              <span className='px-2 py-1 text-xs rounded-full bg-gray-100 dark:bg-gray-900/20 text-gray-600 dark:text-gray-400'>
+                未检测
               </span>
             );
-          })()}
-        </td>
-        <td className='px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2'>
+          }
+          return (
+            <span
+              className={`px-2 py-1 text-xs rounded-full ${status.className}`}
+              title={status.message}
+            >
+              {status.icon} {status.text}
+            </span>
+          );
+        })()}
+      </td>
+      <td className='px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2'>
+        <button
+          onClick={() => handleToggleEnable(source.key)}
+          disabled={isLoading(`toggleSource_${source.key}`)}
+          className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium ${
+            !source.disabled
+              ? buttonStyles.roundedDanger
+              : buttonStyles.roundedSuccess
+          } transition-colors ${
+            isLoading(`toggleSource_${source.key}`)
+              ? 'opacity-50 cursor-not-allowed'
+              : ''
+          }`}
+        >
+          {!source.disabled ? '禁用' : '启用'}
+        </button>
+        {source.from !== 'config' && (
           <button
-            onClick={() => handleToggleEnable(source.key)}
-            disabled={isLoading(`toggleSource_${source.key}`)}
-            className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium ${
-              !source.disabled
-                ? buttonStyles.roundedDanger
-                : buttonStyles.roundedSuccess
-            } transition-colors ${
-              isLoading(`toggleSource_${source.key}`)
+            onClick={() => handleDelete(source.key)}
+            disabled={isLoading(`deleteSource_${source.key}`)}
+            className={`${buttonStyles.roundedSecondary} ${
+              isLoading(`deleteSource_${source.key}`)
                 ? 'opacity-50 cursor-not-allowed'
                 : ''
             }`}
           >
-            {!source.disabled ? '禁用' : '启用'}
+            删除
           </button>
-          {source.from !== 'config' && (
-            <button
-              onClick={() => handleDelete(source.key)}
-              disabled={isLoading(`deleteSource_${source.key}`)}
-              className={`${buttonStyles.roundedSecondary} ${
-                isLoading(`deleteSource_${source.key}`)
-                  ? 'opacity-50 cursor-not-allowed'
-                  : ''
-              }`}
-            >
-              删除
-            </button>
-          )}
-        </td>
-      </tr>
-    );
-  };
+        )}
+      </td>
+    </SortableTableRow>
+  );
 
   // 全选/取消全选
   const handleSelectAll = useCallback(
@@ -4378,15 +4413,33 @@ const VideoSourceConfig = ({
               strategy={verticalListSortingStrategy}
             >
               <tbody className='divide-y divide-gray-200 dark:divide-gray-700'>
-                {sources.map((source) => (
-                  <DraggableRow key={source.key} source={source} />
-                ))}
+                {visibleSources.map(renderRow)}
               </tbody>
             </SortableContext>
           </table>
         </DndContext>
       </div>
 
+      <div className='flex items-center justify-end gap-3 text-sm'>
+        <span>
+          共 {sources.length} 个源，第 {safeSourcePage} / {sourcePageCount}{' '}
+          页（每页 50 个）
+        </span>
+        <button
+          className={buttonStyles.secondary}
+          disabled={safeSourcePage <= 1}
+          onClick={() => setSourcePage(safeSourcePage - 1)}
+        >
+          上一页
+        </button>
+        <button
+          className={buttonStyles.secondary}
+          disabled={safeSourcePage >= sourcePageCount}
+          onClick={() => setSourcePage(safeSourcePage + 1)}
+        >
+          下一页
+        </button>
+      </div>
       {/* 保存排序按钮 */}
       {orderChanged && (
         <div className='flex justify-end'>
@@ -4701,96 +4754,78 @@ const CategoryConfig = ({
   };
 
   // 可拖拽行封装 (dnd-kit)
-  const DraggableRow = ({ category }: { category: CustomCategory }) => {
-    const { attributes, listeners, setNodeRef, transform, transition } =
-      useSortable({ id: `${category.query}:${category.type}` });
-
-    const style = {
-      transform: CSS.Transform.toString(transform),
-      transition,
-    } as React.CSSProperties;
-
-    return (
-      <tr
-        ref={setNodeRef}
-        style={style}
-        className='hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors select-none'
+  const renderRow = (category: CustomCategory) => (
+    <SortableTableRow
+      key={`${category.query}:${category.type}`}
+      id={`${category.query}:${category.type}`}
+    >
+      <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100'>
+        {category.name || '-'}
+      </td>
+      <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100'>
+        <span
+          className={`px-2 py-1 text-xs rounded-full ${
+            category.type === 'movie'
+              ? 'bg-blue-100 dark:bg-blue-900/20 text-blue-800 dark:text-blue-300'
+              : 'bg-purple-100 dark:bg-purple-900/20 text-purple-800 dark:text-purple-300'
+          }`}
+        >
+          {category.type === 'movie' ? '电影' : '电视剧'}
+        </span>
+      </td>
+      <td
+        className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100 max-w-48 truncate'
+        title={category.query}
       >
-        <td
-          className='px-2 py-4 cursor-grab text-gray-400'
-          style={{ touchAction: 'none' }}
-          {...{ ...attributes, ...listeners }}
+        {category.query}
+      </td>
+      <td className='px-6 py-4 whitespace-nowrap max-w-4'>
+        <span
+          className={`px-2 py-1 text-xs rounded-full ${
+            !category.disabled
+              ? 'bg-green-100 dark:bg-green-900/20 text-green-800 dark:text-green-300'
+              : 'bg-red-100 dark:bg-red-900/20 text-red-800 dark:text-red-300'
+          }`}
         >
-          <GripVertical size={16} />
-        </td>
-        <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100'>
-          {category.name || '-'}
-        </td>
-        <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100'>
-          <span
-            className={`px-2 py-1 text-xs rounded-full ${
-              category.type === 'movie'
-                ? 'bg-blue-100 dark:bg-blue-900/20 text-blue-800 dark:text-blue-300'
-                : 'bg-purple-100 dark:bg-purple-900/20 text-purple-800 dark:text-purple-300'
-            }`}
-          >
-            {category.type === 'movie' ? '电影' : '电视剧'}
-          </span>
-        </td>
-        <td
-          className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100 max-w-48 truncate'
-          title={category.query}
+          {!category.disabled ? '启用中' : '已禁用'}
+        </span>
+      </td>
+      <td className='px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2'>
+        <button
+          onClick={() => handleToggleEnable(category.query, category.type)}
+          disabled={isLoading(
+            `toggleCategory_${category.query}_${category.type}`,
+          )}
+          className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium ${
+            !category.disabled
+              ? buttonStyles.roundedDanger
+              : buttonStyles.roundedSuccess
+          } transition-colors ${
+            isLoading(`toggleCategory_${category.query}_${category.type}`)
+              ? 'opacity-50 cursor-not-allowed'
+              : ''
+          }`}
         >
-          {category.query}
-        </td>
-        <td className='px-6 py-4 whitespace-nowrap max-w-4'>
-          <span
-            className={`px-2 py-1 text-xs rounded-full ${
-              !category.disabled
-                ? 'bg-green-100 dark:bg-green-900/20 text-green-800 dark:text-green-300'
-                : 'bg-red-100 dark:bg-red-900/20 text-red-800 dark:text-red-300'
-            }`}
-          >
-            {!category.disabled ? '启用中' : '已禁用'}
-          </span>
-        </td>
-        <td className='px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2'>
+          {!category.disabled ? '禁用' : '启用'}
+        </button>
+        {category.from !== 'config' && (
           <button
-            onClick={() => handleToggleEnable(category.query, category.type)}
+            onClick={() => handleDelete(category.query, category.type)}
             disabled={isLoading(
-              `toggleCategory_${category.query}_${category.type}`,
+              `deleteCategory_${category.query}_${category.type}`,
             )}
-            className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium ${
-              !category.disabled
-                ? buttonStyles.roundedDanger
-                : buttonStyles.roundedSuccess
-            } transition-colors ${
-              isLoading(`toggleCategory_${category.query}_${category.type}`)
+            className={`${buttonStyles.roundedSecondary} ${
+              isLoading(`deleteCategory_${category.query}_${category.type}`)
                 ? 'opacity-50 cursor-not-allowed'
                 : ''
             }`}
           >
-            {!category.disabled ? '禁用' : '启用'}
+            删除
           </button>
-          {category.from !== 'config' && (
-            <button
-              onClick={() => handleDelete(category.query, category.type)}
-              disabled={isLoading(
-                `deleteCategory_${category.query}_${category.type}`,
-              )}
-              className={`${buttonStyles.roundedSecondary} ${
-                isLoading(`deleteCategory_${category.query}_${category.type}`)
-                  ? 'opacity-50 cursor-not-allowed'
-                  : ''
-              }`}
-            >
-              删除
-            </button>
-          )}
-        </td>
-      </tr>
-    );
-  };
+        )}
+      </td>
+    </SortableTableRow>
+  );
 
   if (!config) {
     return (
@@ -4909,12 +4944,7 @@ const CategoryConfig = ({
               strategy={verticalListSortingStrategy}
             >
               <tbody className='divide-y divide-gray-200 dark:divide-gray-700'>
-                {categories.map((category) => (
-                  <DraggableRow
-                    key={`${category.query}:${category.type}`}
-                    category={category}
-                  />
-                ))}
+                {categories.map(renderRow)}
               </tbody>
             </SortableContext>
           </table>
@@ -6824,115 +6854,93 @@ const LiveSourceConfig = ({
   };
 
   // 可拖拽行封装 (dnd-kit)
-  const DraggableRow = ({ liveSource }: { liveSource: LiveDataSource }) => {
-    const { attributes, listeners, setNodeRef, transform, transition } =
-      useSortable({ id: liveSource.key });
-
-    const style = {
-      transform: CSS.Transform.toString(transform),
-      transition,
-    } as React.CSSProperties;
-
-    return (
-      <tr
-        ref={setNodeRef}
-        style={style}
-        className='hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors select-none'
+  const renderRow = (liveSource: LiveDataSource) => (
+    <SortableTableRow key={liveSource.key} id={liveSource.key}>
+      <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100'>
+        {liveSource.name}
+      </td>
+      <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100'>
+        {liveSource.key}
+      </td>
+      <td
+        className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100 max-w-48 truncate'
+        title={liveSource.url}
       >
-        <td
-          className='px-2 py-4 cursor-grab text-gray-400'
-          style={{ touchAction: 'none' }}
-          {...attributes}
-          {...listeners}
+        {liveSource.url}
+      </td>
+      <td
+        className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100 max-w-32 truncate'
+        title={liveSource.epg || '-'}
+      >
+        {liveSource.epg || '-'}
+      </td>
+      <td
+        className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100 max-w-32 truncate'
+        title={liveSource.ua || '-'}
+      >
+        {liveSource.ua || '-'}
+      </td>
+      <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100 text-center'>
+        {liveSource.channelNumber && liveSource.channelNumber > 0
+          ? liveSource.channelNumber
+          : '-'}
+      </td>
+      <td className='px-6 py-4 whitespace-nowrap max-w-4'>
+        <span
+          className={`px-2 py-1 text-xs rounded-full ${
+            !liveSource.disabled
+              ? 'bg-green-100 dark:bg-green-900/20 text-green-800 dark:text-green-300'
+              : 'bg-red-100 dark:bg-red-900/20 text-red-800 dark:text-red-300'
+          }`}
         >
-          <GripVertical size={16} />
-        </td>
-        <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100'>
-          {liveSource.name}
-        </td>
-        <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100'>
-          {liveSource.key}
-        </td>
-        <td
-          className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100 max-w-48 truncate'
-          title={liveSource.url}
+          {!liveSource.disabled ? '启用中' : '已禁用'}
+        </span>
+      </td>
+      <td className='px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2'>
+        <button
+          onClick={() => handleToggleEnable(liveSource.key)}
+          disabled={isLoading(`toggleLiveSource_${liveSource.key}`)}
+          className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium ${
+            !liveSource.disabled
+              ? buttonStyles.roundedDanger
+              : buttonStyles.roundedSuccess
+          } transition-colors ${
+            isLoading(`toggleLiveSource_${liveSource.key}`)
+              ? 'opacity-50 cursor-not-allowed'
+              : ''
+          }`}
         >
-          {liveSource.url}
-        </td>
-        <td
-          className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100 max-w-32 truncate'
-          title={liveSource.epg || '-'}
-        >
-          {liveSource.epg || '-'}
-        </td>
-        <td
-          className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100 max-w-32 truncate'
-          title={liveSource.ua || '-'}
-        >
-          {liveSource.ua || '-'}
-        </td>
-        <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100 text-center'>
-          {liveSource.channelNumber && liveSource.channelNumber > 0
-            ? liveSource.channelNumber
-            : '-'}
-        </td>
-        <td className='px-6 py-4 whitespace-nowrap max-w-4'>
-          <span
-            className={`px-2 py-1 text-xs rounded-full ${
-              !liveSource.disabled
-                ? 'bg-green-100 dark:bg-green-900/20 text-green-800 dark:text-green-300'
-                : 'bg-red-100 dark:bg-red-900/20 text-red-800 dark:text-red-300'
-            }`}
-          >
-            {!liveSource.disabled ? '启用中' : '已禁用'}
-          </span>
-        </td>
-        <td className='px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2'>
-          <button
-            onClick={() => handleToggleEnable(liveSource.key)}
-            disabled={isLoading(`toggleLiveSource_${liveSource.key}`)}
-            className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium ${
-              !liveSource.disabled
-                ? buttonStyles.roundedDanger
-                : buttonStyles.roundedSuccess
-            } transition-colors ${
-              isLoading(`toggleLiveSource_${liveSource.key}`)
-                ? 'opacity-50 cursor-not-allowed'
-                : ''
-            }`}
-          >
-            {!liveSource.disabled ? '禁用' : '启用'}
-          </button>
-          {liveSource.from !== 'config' && (
-            <>
-              <button
-                onClick={() => setEditingLiveSource(liveSource)}
-                disabled={isLoading(`editLiveSource_${liveSource.key}`)}
-                className={`${buttonStyles.roundedPrimary} ${
-                  isLoading(`editLiveSource_${liveSource.key}`)
-                    ? 'opacity-50 cursor-not-allowed'
-                    : ''
-                }`}
-              >
-                编辑
-              </button>
-              <button
-                onClick={() => handleDelete(liveSource.key)}
-                disabled={isLoading(`deleteLiveSource_${liveSource.key}`)}
-                className={`${buttonStyles.roundedSecondary} ${
-                  isLoading(`deleteLiveSource_${liveSource.key}`)
-                    ? 'opacity-50 cursor-not-allowed'
-                    : ''
-                }`}
-              >
-                删除
-              </button>
-            </>
-          )}
-        </td>
-      </tr>
-    );
-  };
+          {!liveSource.disabled ? '禁用' : '启用'}
+        </button>
+        {liveSource.from !== 'config' && (
+          <>
+            <button
+              onClick={() => setEditingLiveSource(liveSource)}
+              disabled={isLoading(`editLiveSource_${liveSource.key}`)}
+              className={`${buttonStyles.roundedPrimary} ${
+                isLoading(`editLiveSource_${liveSource.key}`)
+                  ? 'opacity-50 cursor-not-allowed'
+                  : ''
+              }`}
+            >
+              编辑
+            </button>
+            <button
+              onClick={() => handleDelete(liveSource.key)}
+              disabled={isLoading(`deleteLiveSource_${liveSource.key}`)}
+              className={`${buttonStyles.roundedSecondary} ${
+                isLoading(`deleteLiveSource_${liveSource.key}`)
+                  ? 'opacity-50 cursor-not-allowed'
+                  : ''
+              }`}
+            >
+              删除
+            </button>
+          </>
+        )}
+      </td>
+    </SortableTableRow>
+  );
 
   if (!config) {
     return (
@@ -7233,9 +7241,7 @@ const LiveSourceConfig = ({
               strategy={verticalListSortingStrategy}
             >
               <tbody className='divide-y divide-gray-200 dark:divide-gray-700'>
-                {liveSources.map((liveSource) => (
-                  <DraggableRow key={liveSource.key} liveSource={liveSource} />
-                ))}
+                {liveSources.map(renderRow)}
               </tbody>
             </SortableContext>
           </table>

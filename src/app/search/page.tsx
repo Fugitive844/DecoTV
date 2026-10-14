@@ -4,6 +4,7 @@
 import { ChevronLeft, ChevronRight, ChevronUp, Search, X } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import React, {
+  startTransition,
   Suspense,
   useCallback,
   useEffect,
@@ -28,7 +29,7 @@ import SearchResultFilter, {
   SearchFilterCategory,
 } from '@/components/SearchResultFilter';
 import SearchSuggestions from '@/components/SearchSuggestions';
-import VideoCard, { VideoCardHandle } from '@/components/VideoCard';
+import VideoCard from '@/components/VideoCard';
 import VirtualizedVideoGrid from '@/components/VirtualizedVideoGrid';
 
 type SafeSearchState = {
@@ -132,10 +133,7 @@ const SearchResultLoadMoreSentinel = React.forwardRef<
       className='mt-8 flex min-h-12 items-center justify-center gap-2 text-sm text-gray-500 dark:text-gray-400'
       aria-live='polite'
     >
-      <span
-        className='inline-block h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-green-500'
-        aria-hidden='true'
-      />
+      <span aria-hidden='true'>↓</span>
       下滑加载更多
     </div>
   );
@@ -151,6 +149,7 @@ function SearchPageClient() {
 
   const router = useRouter();
   const searchParams = useSearchParams();
+  const activeSearchQuery = searchParams.get('q')?.trim() || '';
   const currentQueryRef = useRef<string>('');
   const [searchQuery, setSearchQuery] = useState('');
   const [normalizedQuery, setNormalizedQuery] = useState('');
@@ -175,14 +174,16 @@ function SearchPageClient() {
   const [currentResultPage, setCurrentResultPage] = useState(1);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const resultsSectionRef = useRef<HTMLElement | null>(null);
-  // 聚合卡片 refs 与聚合统计缓存
-  const groupRefs = useRef<
-    Map<string, React.RefObject<VideoCardHandle | null>>
-  >(new Map());
+  // 聚合统计缓存：保留未变化的数组引用，供 memo 卡片复用。
   const groupStatsRef = useRef<
     Map<
       string,
-      { douban_id?: number; episodes?: number; source_names: string[] }
+      {
+        douban_id?: number;
+        episodes?: number;
+        source_names: string[];
+        posters: string[];
+      }
     >
   >(new Map());
 
@@ -193,11 +194,10 @@ function SearchPageClient() {
         | ((previous: SearchResult[]) => SearchResult[] | unknown),
     ) => {
       setSearchResults((previous) => {
-        const safePrevious = sanitizeSearchResults(previous);
         const nextValue =
           typeof value === 'function'
             ? (value as (previous: SearchResult[]) => SearchResult[] | unknown)(
-                safePrevious,
+                previous,
               )
             : value;
         const safeNext = sanitizeSearchResults(nextValue);
@@ -223,24 +223,22 @@ function SearchPageClient() {
   const flushPendingResults = useCallback(() => {
     if (pendingResultsRef.current.length === 0) return;
 
-    const toAppend = pendingResultsRef.current;
+    const toAppend = sanitizeSearchResults(pendingResultsRef.current);
     pendingResultsRef.current = [];
     if (flushTimerRef.current) {
       clearTimeout(flushTimerRef.current);
       flushTimerRef.current = null;
     }
 
-    setSafeSearchResults((previous) => previous.concat(toAppend));
-  }, [setSafeSearchResults]);
-
-  const getGroupRef = (key: string) => {
-    let ref = groupRefs.current.get(key);
-    if (!ref) {
-      ref = React.createRef<VideoCardHandle | null>();
-      groupRefs.current.set(key, ref);
-    }
-    return ref;
-  };
+    // 只校验新增批次；已有 state 已经校验过，避免再次扫描整个历史结果集。
+    startTransition(() =>
+      setSearchResults((previous) => {
+        const next = previous.concat(toAppend);
+        searchResultsRef.current = next;
+        return next;
+      }),
+    );
+  }, []);
 
   const computeGroupStats = (group: SearchResult[]) => {
     const episodes = (() => {
@@ -281,7 +279,10 @@ function SearchPageClient() {
       return res;
     })();
 
-    return { episodes, source_names, douban_id };
+    const posters = [
+      ...new Set(group.map((item) => item.poster).filter(Boolean)),
+    ].slice(0, 4);
+    return { episodes, source_names, douban_id, posters };
   };
   // 过滤器：非聚合与聚合
   const [filterAll, setFilterAll] = useState<{
@@ -392,12 +393,13 @@ function SearchPageClient() {
   // 聚合后的结果（按标题和年份分组）
   // ✨ 只聚合相关度较高的结果（标题包含关键词或模糊匹配）
   const aggregatedResults = useMemo(() => {
+    if (viewMode !== 'agg') return [];
     try {
       // NOTE: 防御性校验 —— 确保 searchResults 是有效数组
       const safeResults = Array.isArray(searchResults) ? searchResults : [];
       if (safeResults.length === 0) return [];
 
-      const query = currentQueryRef.current.trim().toLowerCase();
+      const query = activeSearchQuery.toLowerCase();
       const queryNoSpace = query.replace(/\s+/g, '');
 
       const normQuery = normalizedQuery
@@ -481,35 +483,28 @@ function SearchPageClient() {
       console.error('aggregatedResults 计算异常:', err);
       return [];
     }
-  }, [searchResults]);
+  }, [searchResults, normalizedQuery, viewMode, activeSearchQuery]);
 
-  // 当聚合结果变化时，如果某个聚合已存在，则调用其卡片 ref 的 set 方法增量更新
-  useEffect(() => {
-    aggregatedResults.forEach(([mapKey, group]) => {
+  // 同一批只统计一次；未变化的数组保持引用，避免卡片无效更新。
+  const groupStats = useMemo(() => {
+    const next = new Map<string, ReturnType<typeof computeGroupStats>>();
+    aggregatedResults.forEach(([key, group]) => {
       const stats = computeGroupStats(group);
-      const prev = groupStatsRef.current.get(mapKey);
-      if (!prev) {
-        // 第一次出现，记录初始值，不调用 ref（由初始 props 渲染）
-        groupStatsRef.current.set(mapKey, stats);
-        return;
-      }
-      // 对比变化并调用对应的 set 方法
-      const ref = groupRefs.current.get(mapKey);
-      if (ref && ref.current) {
-        if (prev.episodes !== stats.episodes) {
-          ref.current.setEpisodes(stats.episodes);
-        }
-        const prevNames = (prev.source_names || []).join('|');
-        const nextNames = (stats.source_names || []).join('|');
-        if (prevNames !== nextNames) {
-          ref.current.setSourceNames(stats.source_names);
-        }
-        if (prev.douban_id !== stats.douban_id) {
-          ref.current.setDoubanId(stats.douban_id);
-        }
-        groupStatsRef.current.set(mapKey, stats);
-      }
+      const previous = groupStatsRef.current.get(key);
+      const equal =
+        previous &&
+        previous.episodes === stats.episodes &&
+        previous.douban_id === stats.douban_id &&
+        JSON.stringify(previous.source_names) ===
+          JSON.stringify(stats.source_names) &&
+        JSON.stringify(previous.posters) === JSON.stringify(stats.posters);
+      next.set(
+        key,
+        equal ? (previous as ReturnType<typeof computeGroupStats>) : stats,
+      );
     });
+    groupStatsRef.current = next;
+    return next;
   }, [aggregatedResults]);
 
   // 构建筛选选项
@@ -582,6 +577,7 @@ function SearchPageClient() {
 
   // 非聚合：应用筛选与排序
   const filteredAllResults = useMemo(() => {
+    if (viewMode !== 'all') return [];
     try {
       const safeResults = Array.isArray(searchResults) ? searchResults : [];
       const { source, title, year, resolution, yearOrder } = filterAll;
@@ -606,8 +602,8 @@ function SearchPageClient() {
         if (yearComp !== 0) return yearComp;
 
         // 年份相同时，精确匹配在前
-        const aExactMatch = (a.title || '') === searchQuery.trim();
-        const bExactMatch = (b.title || '') === searchQuery.trim();
+        const aExactMatch = (a.title || '') === activeSearchQuery;
+        const bExactMatch = (b.title || '') === activeSearchQuery;
         if (aExactMatch && !bExactMatch) return -1;
         if (!aExactMatch && bExactMatch) return 1;
 
@@ -620,10 +616,11 @@ function SearchPageClient() {
       console.error('filteredAllResults 计算异常:', err);
       return [];
     }
-  }, [searchResults, filterAll, searchQuery]);
+  }, [searchResults, filterAll, activeSearchQuery, viewMode]);
 
   // 聚合：应用筛选与排序
   const filteredAggResults = useMemo(() => {
+    if (viewMode !== 'agg') return [];
     try {
       const safeAggResults = Array.isArray(aggregatedResults)
         ? aggregatedResults
@@ -663,8 +660,8 @@ function SearchPageClient() {
         if (yearComp !== 0) return yearComp;
 
         // 年份相同时，精确匹配在前
-        const aExactMatch = (a[1][0]?.title ?? '') === searchQuery.trim();
-        const bExactMatch = (b[1][0]?.title ?? '') === searchQuery.trim();
+        const aExactMatch = (a[1][0]?.title ?? '') === activeSearchQuery;
+        const bExactMatch = (b[1][0]?.title ?? '') === activeSearchQuery;
         if (aExactMatch && !bExactMatch) return -1;
         if (!aExactMatch && bExactMatch) return 1;
 
@@ -679,7 +676,7 @@ function SearchPageClient() {
       console.error('filteredAggResults 计算异常:', err);
       return [];
     }
-  }, [aggregatedResults, filterAgg, searchQuery]);
+  }, [aggregatedResults, filterAgg, activeSearchQuery, viewMode]);
 
   const displayedResultCount = useMemo(() => {
     if (viewMode === 'agg') {
@@ -761,10 +758,12 @@ function SearchPageClient() {
     filterAll.title,
     filterAll.year,
     filterAll.yearOrder,
+    filterAll.resolution,
     filterAgg.source,
     filterAgg.title,
     filterAgg.year,
     filterAgg.yearOrder,
+    filterAgg.resolution,
     resultLoadMode,
   ]);
 
@@ -890,7 +889,6 @@ function SearchPageClient() {
     const query = searchParams.get('q') || '';
     const trimmed = query.trim();
     currentQueryRef.current = trimmed;
-    groupRefs.current.clear();
     groupStatsRef.current.clear();
     setVisibleResultCount(SEARCH_RESULT_PAGE_SIZE);
     setCurrentResultPage(1);
@@ -1058,7 +1056,7 @@ function SearchPageClient() {
                 if (!flushTimerRef.current) {
                   flushTimerRef.current = window.setTimeout(
                     flushPendingResults,
-                    80,
+                    250,
                   );
                 }
                 break;
@@ -1183,7 +1181,6 @@ function SearchPageClient() {
       }
       pendingResultsRef.current = [];
       searchResultsRef.current = [];
-      groupRefs.current.clear();
       groupStatsRef.current.clear();
     };
   }, []);
@@ -1410,14 +1407,11 @@ function SearchPageClient() {
                     Array.isArray(filteredAggResults) ? (
                       <>
                         <VirtualizedVideoGrid
-                          // The search page currently scrolls with document.body,
-                          // which can break window-scroll virtualization and make
-                          // only the first screenful of cards appear reachable.
-                          // Prefer full rendering here until the scroll container
-                          // is wired to Virtuoso correctly.
-                          mode='never'
+                          mode={
+                            resultLoadMode === 'infinite' ? 'always' : 'never'
+                          }
+                          scrollParent='body'
                           data={visibleAggResults}
-                          virtualizationThreshold={240}
                           overscan={640}
                           className='justify-start grid grid-cols-3 gap-x-2 gap-y-14 sm:gap-y-20 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] sm:gap-x-8'
                           itemKey={([mapKey]) => `agg-${mapKey}`}
@@ -1430,25 +1424,23 @@ function SearchPageClient() {
                             const title = safeGroup[0]?.title || '';
                             const poster = safeGroup[0]?.poster || '';
                             const year = safeGroup[0]?.year || 'unknown';
-                            const { episodes, source_names, douban_id } =
+                            const {
+                              episodes,
+                              source_names,
+                              douban_id,
+                              posters,
+                            } =
+                              groupStats.get(mapKey) ||
                               computeGroupStats(safeGroup);
                             const type = episodes === 1 ? 'movie' : 'tv';
 
-                            if (!groupStatsRef.current.has(mapKey)) {
-                              groupStatsRef.current.set(mapKey, {
-                                episodes,
-                                source_names,
-                                douban_id,
-                              });
-                            }
-
                             return (
                               <VideoCard
-                                ref={getGroupRef(mapKey)}
                                 from='search'
                                 isAggregate={true}
                                 title={title}
                                 poster={poster}
+                                posterCandidates={posters}
                                 year={year}
                                 episodes={episodes}
                                 source_names={source_names}
@@ -1484,11 +1476,11 @@ function SearchPageClient() {
                   ) : Array.isArray(filteredAllResults) ? (
                     <>
                       <VirtualizedVideoGrid
-                        // See the aggregate grid note above. Disable virtualization
-                        // on the search page so all matched results remain reachable.
-                        mode='never'
+                        mode={
+                          resultLoadMode === 'infinite' ? 'always' : 'never'
+                        }
+                        scrollParent='body'
                         data={visibleAllResults}
-                        virtualizationThreshold={240}
                         overscan={640}
                         className='justify-start grid grid-cols-3 gap-x-2 gap-y-14 sm:gap-y-20 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] sm:gap-x-8'
                         itemKey={(item) => `all-${item.source}-${item.id}`}

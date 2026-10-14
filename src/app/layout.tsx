@@ -116,7 +116,7 @@ export default async function RootLayout({
   };
 
   return (
-    <html lang='zh-CN' suppressHydrationWarning>
+    <html data-render-mode='lite' lang='zh-CN' suppressHydrationWarning>
       <head>
         <meta
           name='viewport'

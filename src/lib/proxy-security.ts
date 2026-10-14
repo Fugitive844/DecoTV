@@ -55,9 +55,17 @@ function isBlockedIPv4(address: string): boolean {
 }
 
 function isBlockedIPv6(address: string): boolean {
-  const normalized = address.toLowerCase();
+  const normalized = normalizeHostname(
+    new URL(`http://[${address}]/`).hostname,
+  );
   const mapped = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
   if (mapped) return isBlockedIPv4(mapped[1]);
+  const hexMapped = normalized.match(/^::ffff:([\da-f]{1,4}):([\da-f]{1,4})$/);
+  if (hexMapped) {
+    const high = parseInt(hexMapped[1], 16);
+    const low = parseInt(hexMapped[2], 16);
+    return isBlockedIPv4(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`);
+  }
 
   return (
     normalized === '::' ||
@@ -81,6 +89,11 @@ function isBlockedAddress(address: string): boolean {
 }
 
 export async function validateProxyTargetUrl(rawUrl: string): Promise<string> {
+  return (await resolveProxyTargetUrl(rawUrl)).url.toString();
+}
+
+/** 返回已经验证的地址，供图片请求固定 DNS 结果，避免二次解析。 */
+export async function resolveProxyTargetUrl(rawUrl: string) {
   let parsed: URL;
   try {
     parsed = new URL(rawUrl);
@@ -104,7 +117,10 @@ export async function validateProxyTargetUrl(rawUrl: string): Promise<string> {
   const literalVersion = isIP(hostname);
   if (literalVersion) {
     if (isBlockedAddress(hostname)) throw new Error('Blocked IP address');
-    return parsed.toString();
+    return {
+      url: parsed,
+      addresses: [{ address: hostname, family: literalVersion }],
+    };
   }
 
   const records = await lookup(hostname, { all: true, verbatim: true });
@@ -114,7 +130,7 @@ export async function validateProxyTargetUrl(rawUrl: string): Promise<string> {
     throw new Error('Host resolves to a blocked IP address');
   }
 
-  return parsed.toString();
+  return { url: parsed, addresses: records };
 }
 
 async function fetchWithTimeout(

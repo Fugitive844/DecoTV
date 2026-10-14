@@ -304,7 +304,7 @@ function TopNavbar() {
       }}
     >
       <div className='mx-auto max-w-7xl px-4'>
-        <div className='mt-2 rounded-2xl border border-white/10 bg-white/85 dark:bg-gray-900/85 md:bg-white/45 md:dark:bg-gray-900/55 shadow-[0_0_1px_0_rgba(255,255,255,0.35),0_8px_20px_-12px_rgba(15,23,42,0.45)] backdrop-blur-none md:backdrop-blur-sm'>
+        <div className='deco-nav-surface mt-2 rounded-2xl border border-white/10 bg-white/85 dark:bg-gray-900/85 md:bg-white/45 md:dark:bg-gray-900/55 shadow-[0_0_1px_0_rgba(255,255,255,0.35),0_8px_20px_-12px_rgba(15,23,42,0.45)] backdrop-blur-none md:backdrop-blur-sm'>
           <nav className='flex h-14 items-center gap-2 px-3 lg:gap-3'>
             <div className='flex shrink-0 items-center gap-2 min-w-0'>
               <FastLink
