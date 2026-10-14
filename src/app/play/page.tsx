@@ -4,7 +4,7 @@
 
 // NOTE: 这些重型库通过页面级代码分割自动懒加载（play 页面独立 chunk）
 import Artplayer from 'artplayer';
-import artplayerPluginDanmuku from 'artplayer-plugin-danmuku';
+import type ArtplayerPluginDanmuku from 'artplayer-plugin-danmuku';
 import Hls from 'hls.js';
 import { Bell, Download, Heart, LoaderCircle } from 'lucide-react';
 import dynamic from 'next/dynamic';
@@ -669,6 +669,11 @@ function PlayPageClient() {
   // 状态变量（State）
   // -----------------------------------------------------------------------------
   const [loading, setLoading] = useState(true);
+  // 弹幕插件只在浏览器中动态加载：它是 Parcel UMD 包，服务端执行时会改写
+  // module.exports，覆盖页面模块或 webpack chunk 的导出，导致 /play 500
+  const [artplayerPluginDanmuku, setArtplayerPluginDanmuku] = useState<
+    typeof ArtplayerPluginDanmuku | null
+  >(null);
   const [loadingStage, setLoadingStage] = useState<
     'searching' | 'preferring' | 'fetching' | 'ready'
   >('searching');
@@ -3879,9 +3884,20 @@ function PlayPageClient() {
   };
 
   useEffect(() => {
+    let active = true;
+    import('artplayer-plugin-danmuku').then((mod) => {
+      if (active) setArtplayerPluginDanmuku(() => mod.default);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     if (
       !Artplayer ||
       !Hls ||
+      !artplayerPluginDanmuku ||
       !videoUrl ||
       loading ||
       currentEpisodeIndex === null ||
@@ -4683,6 +4699,7 @@ function PlayPageClient() {
   }, [
     Artplayer,
     Hls,
+    artplayerPluginDanmuku,
     blockAdEnabled,
     loading,
     resetAudioTrackState,
