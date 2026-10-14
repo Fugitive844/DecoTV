@@ -1,6 +1,6 @@
 # Docker 镜像推送与服务器部署
 
-本指南面向 `Fugitive844/DecoTV` 的维护者。下面的命令是后续操作步骤，不代表本轮已执行完毕。实际进度见[发布状态与接手事项](发布状态与接手事项.md)。
+本指南面向 `Fugitive844/DecoTV` 的维护者。下面是后续更新时可以复用的步骤；2026-10-14 本轮镜像推送和生产更新已经完成，具体执行结果见[发布状态与接手事项](发布状态与接手事项.md)。
 
 GitHub 只做普通代码和文档提交/推送，**不创建 GitHub Release 或 Git tag**。文中“镜像发布”指向 Docker Hub 上传容器镜像；Docker 镜像的版本标签不需要对应 Git tag。
 
@@ -124,7 +124,9 @@ docker logs --tail 80 decotv-release-smoke
 
 选择没有被占用的容器名和本地端口；如果同名容器存在，先确认是否属于本次发布再处理。打开 `http://localhost:13000`，完成登录、搜索、封面解码、管理分页与源检测。检查 `version.json` 的 commit SHA；使用同一套非成人测试源，不导入生产数据库。
 
-测试完成后 `docker stop decotv-release-smoke`，确认身份再执行 `docker rm decotv-release-smoke`；不删除本地 Kvrocks 或卷。这些运行验证在本轮镜像上**尚未执行**。没有 healthcheck 时，容器显示 running 不能代替登录、接口及图片验证。
+测试完成后 `docker stop decotv-release-smoke`，确认身份再执行 `docker rm decotv-release-smoke`；不删除本地 Kvrocks 或卷。没有 healthcheck 时，容器显示 running 不能代替功能验证。
+
+若同一提交已通过功能测试，按用户要求可跳过构建后的重复功能测试，直接推送和部署，仍核对容器启动、实际镜像版本与数据库保留。本轮用户明确要求停止重复测试，后续按此执行；不要把跳过的生产功能复测写成通过。
 
 ## 四、登录并推送 Docker Hub
 
