@@ -20,20 +20,27 @@ type ExternalImageProps = Omit<ImageProps, 'src'> & {
   src: ImageProps['src'];
   fallbackSrc?: string;
   proxyWidth?: number;
+  alternateSrcs?: string[];
 };
 
 function resolveSrcCandidates(
   src: ImageProps['src'],
   proxyWidth: number,
   doubanImageProxy?: DoubanImageProxyOverride,
+  alternateSrcs?: string[],
 ): ImageProps['src'][] {
   if (typeof src !== 'string') {
     return [src];
   }
-  return resolveImageUrlCandidates(src, {
-    wsrvWidth: proxyWidth,
-    doubanImageProxy,
-  });
+  const urls = [src, ...(alternateSrcs || [])]
+    .flatMap((url) =>
+      resolveImageUrlCandidates(url, {
+        wsrvWidth: proxyWidth,
+        doubanImageProxy,
+      }),
+    )
+    .filter((url) => url !== POSTER_FALLBACK_SRC);
+  return [...new Set(urls), POSTER_FALLBACK_SRC];
 }
 
 let cachedClientDoubanImageProxy: DoubanImageProxyOverride | undefined;
@@ -92,14 +99,18 @@ export default function ExternalImage(props: ExternalImageProps) {
     onError: externalOnError,
     fallbackSrc = POSTER_FALLBACK_SRC,
     proxyWidth = 256,
+    alternateSrcs,
     ...rest
   } = props;
 
   // SSR 与首屏渲染只走 process.env 默认值，确保两端 HTML 一致避免 hydration 警告。
   const ssrSafeCandidates = useMemo(
     () =>
-      withFallbackCandidate(resolveSrcCandidates(src, proxyWidth), fallbackSrc),
-    [src, proxyWidth, fallbackSrc],
+      withFallbackCandidate(
+        resolveSrcCandidates(src, proxyWidth, undefined, alternateSrcs),
+        fallbackSrc,
+      ),
+    [src, proxyWidth, fallbackSrc, alternateSrcs],
   );
   const [candidates, setCandidates] =
     useState<ImageProps['src'][]>(ssrSafeCandidates);
@@ -109,10 +120,9 @@ export default function ExternalImage(props: ExternalImageProps) {
   // 客户端挂载后再叠加 RUNTIME_CONFIG / localStorage 中的用户/管理员选择。
   useEffect(() => {
     const refreshCandidates = () => {
-      cachedClientDoubanImageProxyAt = 0;
       const override = readClientDoubanImageProxy();
       const nextCandidates = withFallbackCandidate(
-        resolveSrcCandidates(src, proxyWidth, override),
+        resolveSrcCandidates(src, proxyWidth, override, alternateSrcs),
         fallbackSrc,
       );
       setCandidates((previousCandidates) =>
@@ -124,12 +134,16 @@ export default function ExternalImage(props: ExternalImageProps) {
     };
 
     refreshCandidates();
-    window.addEventListener('doubanProxyChanged', refreshCandidates);
+    const onProxyChanged = () => {
+      cachedClientDoubanImageProxyAt = 0;
+      refreshCandidates();
+    };
+    window.addEventListener('doubanProxyChanged', onProxyChanged);
 
     return () => {
-      window.removeEventListener('doubanProxyChanged', refreshCandidates);
+      window.removeEventListener('doubanProxyChanged', onProxyChanged);
     };
-  }, [src, proxyWidth, fallbackSrc]);
+  }, [src, proxyWidth, fallbackSrc, alternateSrcs]);
 
   const handleLoad = useCallback(
     (e: SyntheticEvent<HTMLImageElement, Event>) => {

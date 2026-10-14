@@ -104,6 +104,9 @@ importers:
       swiper:
         specifier: ^11.2.8
         version: 11.2.10
+      sharp:
+        specifier: 0.34.5
+        version: 0.34.5
       tailwind-merge:
         specifier: ^2.6.0
         version: 2.6.0

@@ -248,7 +248,7 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
         'w-auto max-w-[92vw]',
         // 外观样式 - 磨砂玻璃胶囊 (亮色/暗色自适应)
         'rounded-full',
-        'bg-white/92 dark:bg-black/90',
+        'deco-nav-surface bg-white/92 dark:bg-black/90',
         'backdrop-blur-[6px]',
         'border border-black/5 dark:border-white/10',
         'shadow-lg shadow-black/8 dark:shadow-xl dark:shadow-black/35',

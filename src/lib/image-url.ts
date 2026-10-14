@@ -73,8 +73,7 @@ function isDoubanImageHost(hostname: string): boolean {
 }
 
 function toWsrvUrl(absoluteUrl: string, wsrvWidth: number): string {
-  const sanitizedTarget = absoluteUrl.replace(/^https?:\/\//i, '');
-  return `https://wsrv.nl/?url=${encodeURIComponent(sanitizedTarget)}&w=${wsrvWidth}&default=blank`;
+  return `/api/image-proxy?url=${encodeURIComponent(absoluteUrl)}&w=${wsrvWidth}`;
 }
 
 function getDefaultDoubanImageProxy(): {
@@ -117,7 +116,10 @@ export function rememberDoubanImageProvider(src: string): void {
   let provider: DoubanImageProxyType | null = null;
 
   if (src.startsWith('/api/image-proxy')) {
-    provider = 'server';
+    const target = toAbsoluteUrl(
+      new URL(src, 'https://localhost').searchParams.get('url') || '',
+    );
+    if (target && isDoubanImageHost(target.hostname)) provider = 'server';
   } else if (parsedUrl?.hostname === DOUBAN_IMG3_HOST) {
     provider = 'img3';
   } else if (parsedUrl?.hostname === CMLIUSSSS_ALI_HOST) {
@@ -253,7 +255,13 @@ export function resolveImageUrlCandidates(
   const hostname = parsedUrl.hostname.toLowerCase();
 
   if (WSRV_HOSTS.has(hostname)) {
-    return [parsedUrl.toString(), POSTER_FALLBACK_SRC];
+    const target = parsedUrl.searchParams.get('url');
+    if (!target) return [POSTER_FALLBACK_SRC];
+    // 老版本 wsrv 地址不带协议时，服务端兼容 HTTPS / HTTP；明确的协议不改写。
+    return [
+      toWsrvUrl(target, normalizeWsrvWidth(options.wsrvWidth)),
+      POSTER_FALLBACK_SRC,
+    ];
   }
 
   if (TIER1_DIRECT_HOSTS.has(hostname)) {
@@ -285,7 +293,7 @@ export function resolveImageUrlCandidates(
 
   return [
     toWsrvUrl(parsedUrl.toString(), normalizeWsrvWidth(options.wsrvWidth)),
-    parsedUrl.toString(),
+    ...(parsedUrl.protocol === 'https:' ? [parsedUrl.toString()] : []),
     POSTER_FALLBACK_SRC,
   ];
 }

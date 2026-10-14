@@ -9,6 +9,16 @@ const nextConfig = {
 
   reactStrictMode: false,
 
+  // Windows 本地开发可使用 Webpack，避免 Turbopack 外部原生依赖的 symlink 权限要求。
+  webpack(config) {
+    const assetRule = config.module.rules.find((rule) =>
+      rule.test?.test?.('.svg'),
+    );
+    if (assetRule) assetRule.exclude = /\.svg$/i;
+    config.module.rules.push({ test: /\.svg$/i, use: ['@svgr/webpack'] });
+    return config;
+  },
+
   // Next.js 16 使用 Turbopack，配置 SVG 加载
   turbopack: {
     root: __dirname,

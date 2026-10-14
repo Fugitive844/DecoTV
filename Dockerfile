@@ -1,8 +1,8 @@
 # ---- 第 1 阶段：安装依赖 ----
-FROM node:20-alpine AS deps
+FROM node:22-alpine AS deps
 
-# 启用 corepack 并激活 pnpm（Node20 默认提供 corepack）
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# 固定到 packageManager 声明的版本，避免升级 pnpm 导致锁文件不兼容。
+RUN corepack enable && corepack prepare pnpm@10.14.0 --activate
 
 WORKDIR /app
 
@@ -10,11 +10,11 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
 
 # 安装所有依赖（含 devDependencies，后续会裁剪）
-RUN pnpm install --frozen-lockfile
+RUN HUSKY=0 pnpm install --frozen-lockfile
 
 # ---- 第 2 阶段：构建项目 ----
-FROM node:20-alpine AS builder
-RUN corepack enable && corepack prepare pnpm@latest --activate
+FROM node:22-alpine AS builder
+RUN corepack enable && corepack prepare pnpm@10.14.0 --activate
 WORKDIR /app
 ARG BUILD_TIMESTAMP
 ARG GIT_COMMIT_SHA
@@ -42,7 +42,7 @@ ENV NEXT_PUBLIC_BUILD_REF=${GIT_REF_NAME}
 RUN pnpm run build
 
 # ---- 第 3 阶段：生成运行时镜像 ----
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 ARG BUILD_TIMESTAMP
 ARG GIT_COMMIT_SHA
 ARG GIT_COMMIT_DATE
