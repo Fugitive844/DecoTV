@@ -25,6 +25,8 @@ export interface DoubanImageProxyOverride {
 
 export interface ResolveImageUrlOptions {
   wsrvWidth?: number;
+  /** SSR defaults to HTTPS-safe candidates; client may allow HTTP on HTTP pages. */
+  pageProtocol?: string;
   /**
    * 显式覆盖豆瓣图片代理。SSR 与首次客户端渲染保持一致以避免 hydration 不匹配，
    * 因此调用方应只在 client 端的 effect 中读取 localStorage / RUNTIME_CONFIG
@@ -42,7 +44,7 @@ function normalizeWsrvWidth(width?: number): number {
 
 function isRelativeUrl(url: string): boolean {
   return (
-    url.startsWith('/') ||
+    (url.startsWith('/') && !url.startsWith('//')) ||
     url.startsWith('./') ||
     url.startsWith('../') ||
     url.startsWith('#')
@@ -74,6 +76,22 @@ function isDoubanImageHost(hostname: string): boolean {
 
 function toWsrvUrl(absoluteUrl: string, wsrvWidth: number): string {
   return `/api/image-proxy?url=${encodeURIComponent(absoluteUrl)}&w=${wsrvWidth}`;
+}
+
+function directImageCandidates(
+  target: string,
+  options: ResolveImageUrlOptions,
+): string[] {
+  const parsed = toAbsoluteUrl(target);
+  const proxy = toWsrvUrl(target, normalizeWsrvWidth(options.wsrvWidth));
+  const canUseDirect =
+    parsed?.protocol === 'https:' ||
+    (parsed?.protocol === 'http:' && options.pageProtocol === 'http:');
+  return uniqueUrls([
+    ...(parsed && canUseDirect ? [parsed.toString()] : []),
+    proxy,
+    POSTER_FALLBACK_SRC,
+  ]);
 }
 
 function getDefaultDoubanImageProxy(): {
@@ -202,7 +220,10 @@ function buildDoubanImageCandidates(
   proxyType: string,
   proxyUrl: string,
 ): string[] {
-  const candidates: string[] = [];
+  // A previously successful server provider must not suppress a fresh direct try.
+  const candidates: string[] = [
+    applyDoubanImageProxy(parsedUrl, 'direct', proxyUrl),
+  ];
 
   // 图片代理 fallback：用户指定节点先试，随后按 auto 的稳定优先级逐级降级。
   if (proxyType && proxyType !== 'auto') {
@@ -232,9 +253,34 @@ export function resolveImageUrlCandidates(
   originalUrl: string,
   options: ResolveImageUrlOptions = {},
 ): string[] {
-  const trimmed = originalUrl?.trim?.() ?? '';
+  let trimmed = originalUrl?.trim?.() ?? '';
   if (!trimmed) {
     return [POSTER_FALLBACK_SRC];
+  }
+
+  // API responses and older card helpers may already wrap public posters.
+  // Unwrap only this relative public-image endpoint; private library URLs stay intact.
+  for (
+    let depth = 0;
+    depth < 4 && trimmed.startsWith('/api/image-proxy?');
+    depth += 1
+  ) {
+    const target = new URL(trimmed, 'https://localhost').searchParams.get(
+      'url',
+    );
+    if (!target || target === trimmed) break;
+    trimmed = target.trim();
+    if (!/^https?:\/\//i.test(trimmed) && !trimmed.startsWith('/')) {
+      // Legacy wsrv targets sometimes lost their scheme.
+      return uniqueUrls([
+        ...directImageCandidates(`https://${trimmed}`, options).filter(
+          (url) =>
+            !url.startsWith('/api/image-proxy') && url !== POSTER_FALLBACK_SRC,
+        ),
+        toWsrvUrl(trimmed, normalizeWsrvWidth(options.wsrvWidth)),
+        POSTER_FALLBACK_SRC,
+      ]);
+    }
   }
 
   if (
@@ -257,18 +303,25 @@ export function resolveImageUrlCandidates(
   if (WSRV_HOSTS.has(hostname)) {
     const target = parsedUrl.searchParams.get('url');
     if (!target) return [POSTER_FALLBACK_SRC];
-    // 老版本 wsrv 地址不带协议时，服务端兼容 HTTPS / HTTP；明确的协议不改写。
-    return [
+    // Try the recovered source first; retain the legacy scheme-less proxy fallback.
+    const directTarget = /^(?:https?:)?\/\//i.test(target)
+      ? target
+      : `https://${target}`;
+    return uniqueUrls([
+      ...directImageCandidates(directTarget, options).filter(
+        (url) =>
+          !url.startsWith('/api/image-proxy') && url !== POSTER_FALLBACK_SRC,
+      ),
       toWsrvUrl(target, normalizeWsrvWidth(options.wsrvWidth)),
       POSTER_FALLBACK_SRC,
-    ];
+    ]);
   }
 
   if (TIER1_DIRECT_HOSTS.has(hostname)) {
     if (parsedUrl.protocol === 'http:') {
       parsedUrl.protocol = 'https:';
     }
-    return [parsedUrl.toString(), POSTER_FALLBACK_SRC];
+    return directImageCandidates(parsedUrl.toString(), options);
   }
 
   if (isDoubanImageHost(hostname)) {
@@ -284,18 +337,14 @@ export function resolveImageUrlCandidates(
     if (parsedUrl.protocol === 'http:') {
       parsedUrl.protocol = 'https:';
     }
-    return [parsedUrl.toString(), POSTER_FALLBACK_SRC];
+    return directImageCandidates(parsedUrl.toString(), options);
   }
 
   if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
     return [trimmed, POSTER_FALLBACK_SRC];
   }
 
-  return [
-    toWsrvUrl(parsedUrl.toString(), normalizeWsrvWidth(options.wsrvWidth)),
-    ...(parsedUrl.protocol === 'https:' ? [parsedUrl.toString()] : []),
-    POSTER_FALLBACK_SRC,
-  ];
+  return directImageCandidates(parsedUrl.toString(), options);
 }
 
 export function resolveImageUrl(

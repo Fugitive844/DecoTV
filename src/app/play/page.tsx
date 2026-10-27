@@ -39,8 +39,11 @@ import {
   attachNextEpisodeCountdown,
   attachShortcutsOverlay,
 } from '@/lib/player/decoArtplayerTheme';
+import {
+  canPlayDirectly,
+  unwrapPlaybackProxy,
+} from '@/lib/player/direct-playback';
 import { isLikelyHlsUrl } from '@/lib/player/hls-url';
-import { selectImmediatePlaybackUrl } from '@/lib/player/playback-source';
 import {
   comparePlaybackMetrics,
   hasMeasuredMediaThroughput,
@@ -138,6 +141,7 @@ interface PlaybackResolveResponse {
   mediaType?: 'hls' | 'file' | 'page' | 'unknown';
   resolved?: boolean;
   proxied?: boolean;
+  proxyUrl?: string;
   error?: string;
 }
 
@@ -901,12 +905,15 @@ function PlayPageClient() {
     typeof setInterval
   > | null>(null);
   const playbackVisualWatchdogStartedAtRef = useRef(0);
-  const directPlaybackRetryKeysRef = useRef<Set<string>>(new Set());
+  const proxyPlaybackRetryKeysRef = useRef<Set<string>>(new Set());
+  const playbackProxyFallbacksRef = useRef<Map<string, string>>(new Map());
+  const playbackHlsUrlsRef = useRef<Set<string>>(new Set());
   const autoSwitchToNextVerifiedSourceRef = useRef<
     (reason: string, failureKind?: VideoSourceFailureKind) => boolean
   >(() => false);
   const playbackUrlCacheRef = useRef<Map<string, string>>(new Map());
   const videoUrlResolveSeqRef = useRef(0);
+  const videoUrlResolveAbortRef = useRef<AbortController | null>(null);
 
   // 折叠状态（仅在 lg 及以上屏幕有效）
   const [isEpisodeSelectorCollapsed, setIsEpisodeSelectorCollapsed] =
@@ -1017,31 +1024,28 @@ function PlayPageClient() {
         };
       }
 
-      const immediatePlayback = selectImmediatePlaybackUrl({
-        rawUrl: trimmedUrl,
-        sourceKey,
-        currentSourceKey: currentSourceRef.current,
-        cache: playbackUrlCacheRef.current,
-        origin:
-          typeof window !== 'undefined'
-            ? window.location.origin
-            : 'http://localhost',
-      });
-      if (immediatePlayback) {
+      // Private library URLs already use their authenticated internal transport.
+      if (
+        sourceKey === 'private_library' ||
+        trimmedUrl.startsWith('/api/private-library/')
+      ) {
         return {
-          playbackUrl: immediatePlayback.url,
-          resolvedUrl: immediatePlayback.url,
+          playbackUrl: trimmedUrl,
+          resolvedUrl: trimmedUrl,
           originalUrl: trimmedUrl,
-          mediaType: isLikelyHlsUrl(immediatePlayback.url) ? 'hls' : 'file',
-          resolved:
-            immediatePlayback.fromCache && immediatePlayback.url !== trimmedUrl,
+          mediaType: isLikelyHlsUrl(trimmedUrl) ? 'hls' : 'file',
+          resolved: false,
         };
       }
 
       const cacheKey = `${sourceKey || currentSourceRef.current || ''}|${trimmedUrl}`;
 
       const params = new URLSearchParams();
-      params.set('url', trimmedUrl);
+      params.set(
+        'url',
+        unwrapPlaybackProxy(trimmedUrl, window.location.origin),
+      );
+      params.set('browser', '1');
       const effectiveSource = sourceKey || currentSourceRef.current;
       if (effectiveSource) params.set('source', effectiveSource);
 
@@ -1065,11 +1069,32 @@ function PlayPageClient() {
         }
 
         const payload = (await response.json()) as PlaybackResolveResponse;
-        const resolvedUrl = payload.playbackUrl || payload.resolvedUrl || '';
+        let resolvedUrl = payload.playbackUrl || payload.resolvedUrl || '';
         if (resolvedUrl && payload.mediaType !== 'page') {
+          const directUrl = resolvedUrl;
+          const direct = await canPlayDirectly(
+            directUrl,
+            payload.mediaType === 'hls' || isLikelyHlsUrl(directUrl),
+            window.location.href,
+            signal,
+          );
+          if (payload.proxyUrl) {
+            playbackProxyFallbacksRef.current.set(directUrl, payload.proxyUrl);
+          }
+          if (payload.mediaType === 'hls') {
+            playbackHlsUrlsRef.current.add(directUrl);
+            if (payload.proxyUrl)
+              playbackHlsUrlsRef.current.add(payload.proxyUrl);
+          }
+          if (!direct) {
+            if (!payload.proxyUrl)
+              throw new Error('当前视频无法直连，且代理地址不可用');
+            resolvedUrl = payload.proxyUrl;
+          }
           playbackUrlCacheRef.current.set(cacheKey, resolvedUrl);
           return {
             ...payload,
+            proxied: !direct,
             playbackUrl: resolvedUrl,
             resolvedUrl,
             originalUrl: payload.originalUrl || trimmedUrl,
@@ -1079,29 +1104,15 @@ function PlayPageClient() {
           };
         }
 
-        return {
-          ...payload,
-          playbackUrl: resolvedUrl || trimmedUrl,
-          resolvedUrl: resolvedUrl || payload.resolvedUrl || trimmedUrl,
-          originalUrl: payload.originalUrl || trimmedUrl,
-          mediaType: payload.mediaType || 'unknown',
-          error: payload.error || '未解析到可播放媒体地址',
-        };
+        throw new Error(payload.error || '未解析到可播放媒体地址');
       } catch (error) {
         if (!isAbortError(error)) {
           console.warn('Resolve playback url failed:', error);
         }
         if (isAbortError(error)) throw error;
+        // Do not silently return an unchecked URL after resolution/probe failure.
+        throw error;
       }
-
-      return {
-        playbackUrl: trimmedUrl,
-        resolvedUrl: trimmedUrl,
-        originalUrl: trimmedUrl,
-        mediaType: isLikelyHlsUrl(trimmedUrl) ? 'hls' : 'unknown',
-        resolved: false,
-        error: '无法解析播放地址',
-      };
     },
     [],
   );
@@ -2210,6 +2221,8 @@ function PlayPageClient() {
     detailData: SearchResult | null,
     episodeIndex: number,
   ) => {
+    const resolveSeq = ++videoUrlResolveSeqRef.current;
+    videoUrlResolveAbortRef.current?.abort();
     if (
       !detailData ||
       !detailData.episodes ||
@@ -2224,8 +2237,25 @@ function PlayPageClient() {
       return;
     }
 
-    const resolveSeq = ++videoUrlResolveSeqRef.current;
-    const newUrl = await resolvePlaybackUrl(rawUrl, detailData.source);
+    const controller = new AbortController();
+    videoUrlResolveAbortRef.current = controller;
+    let newUrl: string;
+    try {
+      newUrl = await resolvePlaybackUrl(
+        rawUrl,
+        detailData.source,
+        controller.signal,
+      );
+    } catch (error) {
+      if (resolveSeq !== videoUrlResolveSeqRef.current) return;
+      setVideoUrl('');
+      setIsVideoLoading(false);
+      showToast(
+        error instanceof Error ? error.message : '播放地址检测失败',
+        'error',
+      );
+      return;
+    }
     if (resolveSeq !== videoUrlResolveSeqRef.current) {
       return;
     }
@@ -2278,26 +2308,7 @@ function PlayPageClient() {
     preparePlaybackVideoElement(video);
   };
 
-  const unwrapDirectUrlFromM3u8Proxy = (url: string): string | null => {
-    if (!url || typeof window === 'undefined') return null;
-    try {
-      const parsed = new URL(url, window.location.origin);
-      if (
-        parsed.pathname !== '/api/proxy/m3u8-filter' &&
-        parsed.pathname !== '/api/proxy/m3u8'
-      ) {
-        return null;
-      }
-
-      const upstreamUrl = parsed.searchParams.get('url');
-      if (!upstreamUrl || !/^https?:\/\//i.test(upstreamUrl)) return null;
-      return upstreamUrl;
-    } catch {
-      return null;
-    }
-  };
-
-  const retryCurrentSourceDirectly = (reason: string) => {
+  const retryCurrentSourceThroughProxy = (reason: string) => {
     const activeSource = currentSourceRef.current;
     const activeId = currentIdRef.current;
     const episodeIndex = currentEpisodeIndexRef.current;
@@ -2305,12 +2316,12 @@ function PlayPageClient() {
       return false;
     }
 
-    const directUrl = unwrapDirectUrlFromM3u8Proxy(videoUrl);
-    if (!directUrl || directUrl === videoUrl) return false;
+    const proxyUrl = playbackProxyFallbacksRef.current.get(videoUrl);
+    if (!proxyUrl || proxyUrl === videoUrl) return false;
 
     const retryKey = `${activeSource}-${activeId}-${episodeIndex}`;
-    if (directPlaybackRetryKeysRef.current.has(retryKey)) return false;
-    directPlaybackRetryKeysRef.current.add(retryKey);
+    if (proxyPlaybackRetryKeysRef.current.has(retryKey)) return false;
+    proxyPlaybackRetryKeysRef.current.add(retryKey);
 
     const rawEpisodeUrl =
       detailRef.current?.episodes?.[episodeIndex] ||
@@ -2319,7 +2330,7 @@ function PlayPageClient() {
     if (rawEpisodeUrl) {
       playbackUrlCacheRef.current.set(
         `${activeSource}|${rawEpisodeUrl}`,
-        directUrl,
+        proxyUrl,
       );
     }
 
@@ -2327,8 +2338,8 @@ function PlayPageClient() {
       artPlayerRef.current?.currentTime || resumeTimeRef.current;
     setVideoLoadingStage('sourceChanging');
     setIsVideoLoading(true);
-    showToast(`${reason}，正在尝试直连播放`, 'info');
-    setVideoUrl(directUrl);
+    showToast(`${reason}，正在切换代理播放`, 'info');
+    setVideoUrl(proxyUrl);
     return true;
   };
 
@@ -2963,6 +2974,10 @@ function PlayPageClient() {
   // 当集数索引变化时自动更新视频地址
   useEffect(() => {
     void updateVideoUrl(detail, currentEpisodeIndex);
+    return () => {
+      videoUrlResolveSeqRef.current += 1;
+      videoUrlResolveAbortRef.current?.abort();
+    };
   }, [detail, currentEpisodeIndex]);
 
   useEffect(() => {
@@ -2989,7 +3004,7 @@ function PlayPageClient() {
       if (hasStarted) return;
 
       const reason = '首片加载超时，未取得媒体分片';
-      if (retryCurrentSourceDirectly(reason)) return;
+      if (retryCurrentSourceThroughProxy(reason)) return;
       autoSwitchToNextVerifiedSourceRef.current(reason);
     }, PLAYBACK_STARTUP_FAILOVER_MS);
 
@@ -3928,7 +3943,8 @@ function PlayPageClient() {
       typeof window !== 'undefined' &&
       typeof (window as any).webkitConvertPointFromNodeToPage === 'function';
 
-    const nextIsHls = isLikelyHlsUrl(videoUrl);
+    const nextIsHls =
+      playbackHlsUrlsRef.current.has(videoUrl) || isLikelyHlsUrl(videoUrl);
     const currentVideoHasHls = Boolean(artPlayerRef.current?.video?.hls);
 
     // 非WebKit浏览器且播放器已存在，普通文件源使用 switch 轻量切换。
@@ -3979,7 +3995,7 @@ function PlayPageClient() {
       artPlayerRef.current = new Artplayer({
         container: artRef.current,
         url: videoUrl,
-        type: isLikelyHlsUrl(videoUrl) ? 'm3u8' : '',
+        type: nextIsHls ? 'm3u8' : '',
         poster: videoCover,
         volume: 0.7,
         isLive: false,
@@ -4199,7 +4215,7 @@ function PlayPageClient() {
                       hls.startLoad();
                       return;
                     }
-                    if (retryCurrentSourceDirectly(message)) {
+                    if (retryCurrentSourceThroughProxy(message)) {
                       hls.destroy();
                       return;
                     }
@@ -4652,7 +4668,7 @@ function PlayPageClient() {
           return;
         }
         const reason = '播放器无法加载当前播放源';
-        if (retryCurrentSourceDirectly(reason)) return;
+        if (retryCurrentSourceThroughProxy(reason)) return;
         autoSwitchToNextVerifiedSourceRef.current(reason);
       });
 

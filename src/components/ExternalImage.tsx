@@ -28,6 +28,7 @@ function resolveSrcCandidates(
   proxyWidth: number,
   doubanImageProxy?: DoubanImageProxyOverride,
   alternateSrcs?: string[],
+  pageProtocol?: string,
 ): ImageProps['src'][] {
   if (typeof src !== 'string') {
     return [src];
@@ -37,9 +38,16 @@ function resolveSrcCandidates(
       resolveImageUrlCandidates(url, {
         wsrvWidth: proxyWidth,
         doubanImageProxy,
+        pageProtocol,
       }),
     )
-    .filter((url) => url !== POSTER_FALLBACK_SRC);
+    .filter((url) => url !== POSTER_FALLBACK_SRC)
+    // Exhaust direct candidates across sources before spending server bandwidth.
+    .sort(
+      (left, right) =>
+        Number(left.startsWith('/api/image-proxy?')) -
+        Number(right.startsWith('/api/image-proxy?')),
+    );
   return [...new Set(urls), POSTER_FALLBACK_SRC];
 }
 
@@ -122,7 +130,13 @@ export default function ExternalImage(props: ExternalImageProps) {
     const refreshCandidates = () => {
       const override = readClientDoubanImageProxy();
       const nextCandidates = withFallbackCandidate(
-        resolveSrcCandidates(src, proxyWidth, override, alternateSrcs),
+        resolveSrcCandidates(
+          src,
+          proxyWidth,
+          override,
+          alternateSrcs,
+          window.location.protocol,
+        ),
         fallbackSrc,
       );
       setCandidates((previousCandidates) =>

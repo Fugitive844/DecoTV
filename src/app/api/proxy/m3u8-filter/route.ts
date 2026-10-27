@@ -91,12 +91,18 @@ function buildProxyUrl(
     getEffectiveRequestOrigin(request),
   );
   proxyUrl.searchParams.set('url', upstreamUrl);
+  const incoming = new URL(request.url).searchParams;
+  for (const key of ['forceMedia', 'adfilter']) {
+    const value = incoming.get(key);
+    if (value !== null) proxyUrl.searchParams.set(key, value);
+  }
   if (referer) proxyUrl.searchParams.set('referer', referer);
   if (signature) proxyUrl.searchParams.set('sig', signature);
   return proxyUrl.toString();
 }
 
-function shouldProxyMediaAssets(): boolean {
+function shouldProxyMediaAssets(request: Request): boolean {
+  if (new URL(request.url).searchParams.get('forceMedia') === '1') return true;
   const flag = process.env.M3U8_DIRECT_MEDIA;
   return !(flag === 'true' || flag === '1');
 }
@@ -173,7 +179,7 @@ function rewriteUriAttribute(
     const rewrittenUrl =
       target === 'playlist'
         ? buildProxyUrl(request, resolvedUrl, referer)
-        : shouldProxyMediaAssets()
+        : shouldProxyMediaAssets(request)
           ? buildAssetProxyUrl(request, resolvedUrl, referer, kind)
           : resolvedUrl;
     return match.replace(uri, rewrittenUrl);
@@ -234,7 +240,7 @@ function rewriteVariantPlaylist(
   referer?: string,
 ): string {
   const lines = content.split('\n');
-  const proxyMedia = shouldProxyMediaAssets();
+  const proxyMedia = shouldProxyMediaAssets(request);
 
   return lines
     .map((rawLine) => {
