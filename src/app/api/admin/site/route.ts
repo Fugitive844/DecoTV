@@ -3,6 +3,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { persistAdminConfigMutation } from '@/lib/admin-config-mutation';
+import { normalizeApkDownloadUrl } from '@/lib/apk-download';
 import { verifyApiAuth } from '@/lib/auth';
 import { getConfig, getLocalModeConfig } from '@/lib/config';
 
@@ -14,6 +15,18 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
+    const requestedApkDownloadUrl = normalizeApkDownloadUrl(
+      body.ApkDownloadUrl,
+    );
+    if (requestedApkDownloadUrl === null) {
+      return NextResponse.json(
+        {
+          error:
+            'APK 下载页地址必须是完整的 HTTP 或 HTTPS 链接，留空可关闭入口',
+        },
+        { status: 400 },
+      );
+    }
 
     // 本地模式（无数据库）：跳过认证，返回成功
     if (authResult.isLocalMode) {
@@ -58,6 +71,10 @@ export async function POST(request: NextRequest) {
 
       const localConfig = getLocalModeConfig();
       localConfig.SiteConfig = {
+        ApkDownloadUrl:
+          body.ApkDownloadUrl === undefined
+            ? localConfig.SiteConfig.ApkDownloadUrl || ''
+            : requestedApkDownloadUrl,
         SiteName,
         Announcement,
         SearchDownstreamMaxPage,
@@ -174,7 +191,23 @@ export async function POST(request: NextRequest) {
     }
 
     // 更新缓存中的站点设置
+    const previousApkDownloadUrl =
+      normalizeApkDownloadUrl(adminConfig.SiteConfig.ApkDownloadUrl) || '';
+    const nextApkDownloadUrl =
+      body.ApkDownloadUrl === undefined
+        ? previousApkDownloadUrl
+        : requestedApkDownloadUrl;
+    if (
+      username !== process.env.USERNAME &&
+      nextApkDownloadUrl !== previousApkDownloadUrl
+    ) {
+      return NextResponse.json(
+        { error: '仅站长可以修改 APK 下载页地址' },
+        { status: 403 },
+      );
+    }
     adminConfig.SiteConfig = {
+      ApkDownloadUrl: nextApkDownloadUrl,
       SiteName,
       Announcement,
       SearchDownstreamMaxPage,

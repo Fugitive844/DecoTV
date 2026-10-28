@@ -2,6 +2,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
+import { normalizeApkDownloadUrl } from '@/lib/apk-download';
 import { getAuthMode, isPublicAdminAllowed } from '@/lib/auth-mode';
 import { getConfig } from '@/lib/config';
 import { CURRENT_VERSION } from '@/lib/version';
@@ -37,6 +38,8 @@ export async function GET(request: NextRequest) {
   }
 
   const result = {
+    ApkDownloadUrl:
+      normalizeApkDownloadUrl(config.SiteConfig.ApkDownloadUrl) || '',
     SiteName: config.SiteConfig.SiteName,
     StorageType: process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage',
     AuthMode: getAuthMode(),

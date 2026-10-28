@@ -62,6 +62,7 @@ import {
   PrivateLibraryConnector,
   SearchResultLoadMode,
 } from '@/lib/admin.types';
+import { normalizeApkDownloadUrl } from '@/lib/apk-download';
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import { DEFAULT_PANSOU_SERVER_URL } from '@/lib/pansou';
 
@@ -384,6 +385,7 @@ const useLoadingState = () => {
 
 // 新增站点配置类型
 interface SiteConfig {
+  ApkDownloadUrl: string;
   SiteName: string;
   Announcement: string;
   SearchDownstreamMaxPage: number;
@@ -5383,13 +5385,17 @@ const ConfigFileComponent = ({
 const SiteConfigComponent = ({
   config,
   refreshConfig,
+  canManageApkDownload,
 }: {
   config: AdminConfig | null;
   refreshConfig: () => Promise<void>;
+  canManageApkDownload: boolean;
 }) => {
+  const router = useRouter();
   const { alertModal, showAlert, hideAlert } = useAlertModal();
   const { isLoading, withLoading } = useLoadingState();
   const [siteSettings, setSiteSettings] = useState<SiteConfig>({
+    ApkDownloadUrl: '',
     SiteName: '',
     Announcement: '',
     SearchDownstreamMaxPage: 1,
@@ -5470,6 +5476,7 @@ const SiteConfigComponent = ({
     if (config?.SiteConfig) {
       setSiteSettings({
         ...config.SiteConfig,
+        ApkDownloadUrl: config.SiteConfig.ApkDownloadUrl || '',
         DoubanProxyType: config.SiteConfig.DoubanProxyType || 'auto',
         DoubanProxy: config.SiteConfig.DoubanProxy || '',
         DoubanImageProxyType: config.SiteConfig.DoubanImageProxyType || 'auto',
@@ -5616,12 +5623,23 @@ const SiteConfigComponent = ({
 
   // 保存站点配置
   const handleSave = async () => {
+    const apkDownloadUrl = normalizeApkDownloadUrl(siteSettings.ApkDownloadUrl);
+    if (apkDownloadUrl === null) {
+      showError(
+        'APK 下载页地址必须是完整的 HTTP 或 HTTPS 链接，留空可关闭入口',
+        showAlert,
+      );
+      return;
+    }
     await withLoading('saveSiteConfig', async () => {
       try {
         const resp = await fetch('/api/admin/site', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...siteSettings }),
+          body: JSON.stringify({
+            ...siteSettings,
+            ApkDownloadUrl: apkDownloadUrl,
+          }),
         });
 
         if (!resp.ok) {
@@ -5632,6 +5650,7 @@ const SiteConfigComponent = ({
         showSuccess('保存成功, 请刷新页面', showAlert);
         window.dispatchEvent(new CustomEvent('doubanProxyChanged'));
         await refreshConfig();
+        router.refresh();
       } catch (err) {
         showError(err instanceof Error ? err.message : '保存失败', showAlert);
         throw err;
@@ -5664,6 +5683,37 @@ const SiteConfigComponent = ({
         />
       </div>
 
+      {/* 安卓客户端下载 */}
+      <div>
+        <label
+          htmlFor='site-apk-download-url'
+          className='mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300'
+        >
+          APK 下载页地址
+        </label>
+        <input
+          id='site-apk-download-url'
+          type='url'
+          value={siteSettings.ApkDownloadUrl}
+          onChange={(event) =>
+            setSiteSettings((previous) => ({
+              ...previous,
+              ApkDownloadUrl: event.target.value,
+            }))
+          }
+          disabled={!canManageApkDownload}
+          maxLength={2048}
+          placeholder='输入完整的下载页链接，留空隐藏入口'
+          aria-describedby='site-apk-download-help'
+          className='w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-gray-900 focus:border-transparent focus:ring-2 focus:ring-green-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100'
+        />
+        <p
+          id='site-apk-download-help'
+          className='mt-2 text-xs text-gray-500 dark:text-gray-400'
+        >
+          仅站长可修改。保存后用于登录页、注册页和站内右上角的下载按钮、复制链接及二维码；留空关闭入口。
+        </p>
+      </div>
       {/* 站点公告 */}
       <div>
         <label className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2'>
@@ -10330,6 +10380,7 @@ function AdminPageClient() {
             <SiteConfigComponent
               config={config}
               refreshConfig={refreshConfigAfterMutation}
+              canManageApkDownload={role === 'owner'}
             />
           </CollapsibleTab>
 

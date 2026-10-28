@@ -48,6 +48,7 @@ export default async function RootLayout({
   children: React.ReactNode;
 }) {
   const storageType = process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage';
+  const siteConfig = await getConfig();
 
   let siteName = process.env.NEXT_PUBLIC_SITE_NAME || 'DecoTV';
   let announcement =
@@ -73,7 +74,7 @@ export default async function RootLayout({
     query: string;
   }[];
   if (storageType !== 'localstorage') {
-    const config = await getConfig();
+    const config = siteConfig;
     siteName = config.SiteConfig.SiteName;
     announcement = config.SiteConfig.Announcement;
 
@@ -154,7 +155,11 @@ export default async function RootLayout({
           >
             <DownloadManagerProvider>
               <BangumiSubscriptionProvider>
-                <SiteProvider siteName={siteName} announcement={announcement}>
+                <SiteProvider
+                  siteName={siteName}
+                  announcement={announcement}
+                  apkDownloadUrl={siteConfig.SiteConfig.ApkDownloadUrl}
+                >
                   <ParticleBackground />
                   <NavbarGate>
                     <Suspense fallback={null}>

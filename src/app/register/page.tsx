@@ -8,6 +8,7 @@ import { Suspense, useEffect, useState } from 'react';
 import { CURRENT_VERSION } from '@/lib/version';
 import { checkForUpdates, UpdateStatus } from '@/lib/version_check';
 
+import ApkDownloadButton from '@/components/ApkDownloadButton';
 import { useSite } from '@/components/SiteProvider';
 import { ThemeToggle } from '@/components/ThemeToggle';
 
@@ -232,9 +233,10 @@ function RegisterPageClient() {
   // 如果未启用注册
   if (!registrationEnabled) {
     return (
-      <div className='relative min-h-screen flex items-center justify-center px-4 overflow-hidden login-bg'>
+      <div className='relative min-h-screen flex items-center justify-center px-4 py-20 sm:py-24 overflow-hidden login-bg'>
         <div className='absolute inset-0 bg-linear-to-br from-purple-900/20 via-blue-900/20 to-pink-900/20 dark:from-purple-900/40 dark:via-blue-900/40 dark:to-pink-900/40 animate-gradient-shift'></div>
-        <div className='absolute top-4 right-4 z-20'>
+        <div className='fixed top-4 right-4 z-20 flex items-center gap-2'>
+          <ApkDownloadButton />
           <ThemeToggle />
         </div>
         <div className='relative z-10 w-full max-w-md rounded-3xl bg-linear-to-b from-white/90 via-white/70 to-white/40 dark:from-zinc-900/90 dark:via-zinc-900/70 dark:to-zinc-900/40 backdrop-blur-xl shadow-2xl p-10 dark:border dark:border-zinc-800 text-center'>
@@ -251,6 +253,7 @@ function RegisterPageClient() {
           >
             返回登录
           </Link>
+          <ApkDownloadButton variant='recommendation' />
         </div>
         <VersionDisplay />
       </div>
@@ -260,9 +263,10 @@ function RegisterPageClient() {
   // 如果存储模式不支持
   if (storageType === 'localstorage') {
     return (
-      <div className='relative min-h-screen flex items-center justify-center px-4 overflow-hidden login-bg'>
+      <div className='relative min-h-screen flex items-center justify-center px-4 py-20 sm:py-24 overflow-hidden login-bg'>
         <div className='absolute inset-0 bg-linear-to-br from-purple-900/20 via-blue-900/20 to-pink-900/20 dark:from-purple-900/40 dark:via-blue-900/40 dark:to-pink-900/40 animate-gradient-shift'></div>
-        <div className='absolute top-4 right-4 z-20'>
+        <div className='fixed top-4 right-4 z-20 flex items-center gap-2'>
+          <ApkDownloadButton />
           <ThemeToggle />
         </div>
         <div className='relative z-10 w-full max-w-md rounded-3xl bg-linear-to-b from-white/90 via-white/70 to-white/40 dark:from-zinc-900/90 dark:via-zinc-900/70 dark:to-zinc-900/40 backdrop-blur-xl shadow-2xl p-10 dark:border dark:border-zinc-800 text-center'>
@@ -281,6 +285,7 @@ function RegisterPageClient() {
           >
             返回登录
           </Link>
+          <ApkDownloadButton variant='recommendation' />
         </div>
         <VersionDisplay />
       </div>
@@ -288,7 +293,7 @@ function RegisterPageClient() {
   }
 
   return (
-    <div className='relative min-h-screen flex items-center justify-center px-4 overflow-hidden login-bg'>
+    <div className='relative min-h-screen flex items-center justify-center px-4 py-20 sm:py-24 overflow-hidden login-bg'>
       {/* Animated background gradient */}
       <div className='absolute inset-0 bg-linear-to-br from-purple-900/20 via-blue-900/20 to-pink-900/20 dark:from-purple-900/40 dark:via-blue-900/40 dark:to-pink-900/40 animate-gradient-shift'></div>
 
@@ -297,7 +302,8 @@ function RegisterPageClient() {
       <div className='absolute top-3/4 right-1/4 w-24 h-24 bg-blue-500/30 rounded-full blur-xl animate-float-slower'></div>
       <div className='absolute bottom-1/4 left-1/3 w-20 h-20 bg-pink-500/30 rounded-full blur-xl animate-float'></div>
 
-      <div className='absolute top-4 right-4 z-20'>
+      <div className='fixed top-4 right-4 z-20 flex items-center gap-2'>
+        <ApkDownloadButton />
         <ThemeToggle />
       </div>
 
@@ -467,6 +473,7 @@ function RegisterPageClient() {
             </Link>
           </div>
         </form>
+        <ApkDownloadButton variant='recommendation' />
       </div>
 
       {/* 版本信息显示 */}

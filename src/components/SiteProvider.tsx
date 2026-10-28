@@ -2,7 +2,13 @@
 
 import { createContext, ReactNode, useContext } from 'react';
 
-const SiteContext = createContext<{ siteName: string; announcement?: string }>({
+import { normalizeApkDownloadUrl } from '@/lib/apk-download';
+
+const SiteContext = createContext<{
+  siteName: string;
+  announcement?: string;
+  apkDownloadUrl?: string;
+}>({
   // 默认值
   siteName: 'DecoTV',
   announcement:
@@ -15,13 +21,21 @@ export function SiteProvider({
   children,
   siteName,
   announcement,
+  apkDownloadUrl,
 }: {
   children: ReactNode;
   siteName: string;
   announcement?: string;
+  apkDownloadUrl?: string;
 }) {
   return (
-    <SiteContext.Provider value={{ siteName, announcement }}>
+    <SiteContext.Provider
+      value={{
+        siteName,
+        announcement,
+        apkDownloadUrl: normalizeApkDownloadUrl(apkDownloadUrl) || '',
+      }}
+    >
       {children}
     </SiteContext.Provider>
   );

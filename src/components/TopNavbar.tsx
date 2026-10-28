@@ -27,6 +27,7 @@ import {
   useState,
 } from 'react';
 
+import ApkDownloadButton from './ApkDownloadButton';
 import FastLink from './FastLink';
 import SourceBrowserIcon from './icons/SourceBrowserIcon';
 import { useSite } from './SiteProvider';
@@ -374,6 +375,7 @@ function TopNavbar() {
             </div>
 
             <div className='flex shrink-0 items-center gap-2'>
+              <ApkDownloadButton />
               <ThemeToggle />
               <UserMenu />
             </div>

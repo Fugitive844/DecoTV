@@ -288,6 +288,7 @@ async function getInitConfig(
     ConfigFile: configFile,
     ConfigSubscribtion: subConfig,
     SiteConfig: {
+      ApkDownloadUrl: '',
       SiteName: process.env.NEXT_PUBLIC_SITE_NAME || 'DecoTV',
       Announcement:
         process.env.ANNOUNCEMENT ||
@@ -417,6 +418,7 @@ export function getLocalModeConfig(): AdminConfig {
       LastCheck: '',
     },
     SiteConfig: {
+      ApkDownloadUrl: '',
       SiteName: process.env.NEXT_PUBLIC_SITE_NAME || 'DecoTV',
       Announcement:
         process.env.ANNOUNCEMENT ||

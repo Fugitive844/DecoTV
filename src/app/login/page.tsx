@@ -12,6 +12,7 @@ import {
   VersionCheckResult,
 } from '@/lib/version_check';
 
+import ApkDownloadButton from '@/components/ApkDownloadButton';
 import { useSite } from '@/components/SiteProvider';
 import { ThemeToggle } from '@/components/ThemeToggle';
 
@@ -241,7 +242,7 @@ function LoginPageClient() {
   };
 
   return (
-    <div className='relative min-h-screen flex items-center justify-center px-4 overflow-hidden login-bg'>
+    <div className='relative min-h-screen flex items-center justify-center px-4 py-20 sm:py-24 overflow-hidden login-bg'>
       {/* 自定义背景图 */}
       {loginBackground && (
         <>
@@ -280,7 +281,8 @@ function LoginPageClient() {
         </>
       )}
 
-      <div className='absolute top-4 right-4 z-20'>
+      <div className='fixed top-4 right-4 z-20 flex items-center gap-2'>
+        <ApkDownloadButton />
         <ThemeToggle />
       </div>
 
@@ -363,6 +365,7 @@ function LoginPageClient() {
             )}
           </form>
         )}
+        <ApkDownloadButton variant='recommendation' />
       </div>
 
       {/* 版本信息显示 */}

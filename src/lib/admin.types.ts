@@ -51,6 +51,7 @@ export interface AdminConfig {
   ConfigFile: string;
   SiteConfig: {
     SiteName: string;
+    ApkDownloadUrl?: string;
     Announcement: string;
     SearchDownstreamMaxPage: number;
     SiteInterfaceCacheTime: number;

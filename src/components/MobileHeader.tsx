@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 
+import ApkDownloadButton from './ApkDownloadButton';
 import { BackButton } from './BackButton';
 import { useSite } from './SiteProvider';
 import { ThemeToggle } from './ThemeToggle';
@@ -12,7 +13,7 @@ interface MobileHeaderProps {
 }
 
 const MobileHeader = ({ showBackButton = false }: MobileHeaderProps) => {
-  const { siteName } = useSite();
+  const { siteName, apkDownloadUrl } = useSite();
   return (
     <header className='deco-nav-surface md:hidden fixed top-0 left-0 right-0 z-999 w-full bg-white/92 backdrop-blur-[6px] border-b border-gray-200/60 shadow-sm dark:bg-gray-900/92 dark:border-gray-700/60'>
       <div className='h-12 flex items-center justify-between px-4'>
@@ -41,17 +42,20 @@ const MobileHeader = ({ showBackButton = false }: MobileHeaderProps) => {
         </div>
 
         {/* 右侧按钮 */}
-        <div className='flex items-center gap-2'>
+        <div className='flex items-center gap-1'>
           <ThemeToggle />
+          <ApkDownloadButton compact />
           <UserMenu />
         </div>
       </div>
 
       {/* 中间：Logo（绝对居中） */}
-      <div className='absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2'>
+      <div
+        className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 ${apkDownloadUrl ? 'max-w-[calc(100%-17rem)]' : 'max-w-[calc(100%-12rem)]'}`}
+      >
         <Link
           href='/'
-          className='text-2xl font-bold tracking-tight hover:opacity-90 transition-all duration-300 hover:scale-105'
+          className='block truncate text-2xl font-bold tracking-tight hover:opacity-90 transition-all duration-300 hover:scale-105'
         >
           <span className='bg-linear-to-r from-cyan-400 via-purple-500 to-pink-500 bg-clip-text text-transparent animate-pulse hover:animate-none relative'>
             <span className='absolute inset-0 bg-linear-to-r from-cyan-400 via-purple-500 to-pink-500 bg-clip-text text-transparent blur-sm opacity-70'></span>
