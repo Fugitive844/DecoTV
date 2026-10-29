@@ -13,6 +13,7 @@ import {
   searchAuditKey,
   sortPlayAudits,
 } from './audit';
+import type { LiveChannelCacheRecord } from './live-cache.types';
 import {
   Favorite,
   IStorage,
@@ -419,6 +420,39 @@ export abstract class BaseRedisStorage implements IStorage {
     );
   }
 
+  // ---------- 直播频道缓存 ----------
+  async getLiveChannelCache(
+    key: string,
+  ): Promise<LiveChannelCacheRecord | null> {
+    const raw = await this.withRetry(() =>
+      this.client.get(`live:channels:${encodeURIComponent(key)}`),
+    );
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as LiveChannelCacheRecord;
+    } catch {
+      return null;
+    }
+  }
+
+  async setLiveChannelCache(
+    key: string,
+    cache: LiveChannelCacheRecord,
+  ): Promise<void> {
+    await this.withRetry(() =>
+      this.client.set(
+        `live:channels:${encodeURIComponent(key)}`,
+        JSON.stringify(cache),
+      ),
+    );
+  }
+
+  async deleteLiveChannelCache(key: string): Promise<void> {
+    await this.withRetry(() =>
+      this.client.del(`live:channels:${encodeURIComponent(key)}`),
+    );
+  }
+
   // ---------- 跳过片头片尾配置 ----------
   private skipConfigKey(user: string, source: string, id: string) {
     return `u:${user}:skip:${source}+${id}`;
@@ -589,6 +623,12 @@ export abstract class BaseRedisStorage implements IStorage {
 
       // 删除管理员配置
       await this.withRetry(() => this.client.del(this.adminConfigKey()));
+
+      const liveCacheKeys = await this.withRetry(() =>
+        this.client.keys('live:channels:*'),
+      );
+      if (liveCacheKeys.length > 0)
+        await this.withRetry(() => this.client.del(liveCacheKeys));
 
       console.log('所有数据已清空');
     } catch (error) {

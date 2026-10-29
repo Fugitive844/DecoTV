@@ -27,6 +27,7 @@ import {
   saveFavorite,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
+import { isLiveCacheInfoChannel } from '@/lib/live-channel-display.mjs';
 import {
   getLiveChannelKey,
   mergeLiveChannels,
@@ -191,6 +192,9 @@ function LivePageClient() {
 
   // 频道相关
   const [currentChannels, setCurrentChannels] = useState<LiveChannel[]>([]);
+  const [sourceFetchedAtText, setSourceFetchedAtText] = useState<string | null>(
+    null,
+  );
   const [currentChannel, setCurrentChannel] = useState<LiveChannel | null>(
     null,
   );
@@ -854,6 +858,7 @@ function LivePageClient() {
   // 获取频道列表
   const fetchChannels = async (source: LiveSource) => {
     try {
+      setSourceFetchedAtText(null);
       setIsVideoLoading(true);
       clearPlaybackWatchdog();
       setAutoFailoverMessage(null);
@@ -875,7 +880,19 @@ function LivePageClient() {
         throw new Error(result.error || '获取频道列表失败');
       }
 
-      const channelsData = result.data;
+      const channelsData = Array.isArray(result.data)
+        ? result.data.filter(
+            (channel: any) => !isLiveCacheInfoChannel(source.key, channel),
+          )
+        : [];
+      const cacheInfo = Array.isArray(result.data)
+        ? result.data.find((channel: any) =>
+            isLiveCacheInfoChannel(source.key, channel),
+          )
+        : null;
+      setSourceFetchedAtText(
+        typeof cacheInfo?.group === 'string' ? cacheInfo.group : null,
+      );
       if (!channelsData || channelsData.length === 0) {
         // 不抛出错误，而是设置空频道列表
         setCurrentChannels([]);
@@ -2695,6 +2712,27 @@ function LivePageClient() {
                       ref={channelListRef}
                       className='flex-1 overflow-y-auto space-y-2 pb-4'
                     >
+                      {currentSource && (
+                        <div
+                          role='note'
+                          aria-label='上次服务器抓取源时间'
+                          className='flex items-center gap-3 rounded-lg border border-gray-200 bg-white/60 p-3 dark:border-gray-700 dark:bg-gray-800/60'
+                        >
+                          <Clock3 className='h-5 w-5 shrink-0 text-gray-500 dark:text-gray-400' />
+                          <div className='min-w-0'>
+                            <div className='text-sm font-medium text-gray-700 dark:text-gray-200'>
+                              上次服务器抓取源时间
+                            </div>
+                            <div className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
+                              {sourceFetchedAtText
+                                ? sourceFetchedAtText
+                                : isSwitchingSource
+                                  ? '正在读取…'
+                                  : '暂无成功抓取记录'}
+                            </div>
+                          </div>
+                        </div>
+                      )}
                       {displayChannels.length > 0 ? (
                         displayChannels.map((channel) => {
                           const channelKey = getLiveChannelKey(channel);

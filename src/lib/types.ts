@@ -1,4 +1,5 @@
 import { AdminConfig } from './admin.types';
+import type { LiveChannelCacheRecord } from './live-cache.types';
 
 // 播放记录数据结构
 export interface PlayRecord {
@@ -80,6 +81,14 @@ export interface IStorage {
   // 管理员配置相关
   getAdminConfig(): Promise<AdminConfig | null>;
   setAdminConfig(config: AdminConfig): Promise<void>;
+
+  // 直播频道与节目单的最后成功缓存，无 TTL。
+  getLiveChannelCache(key: string): Promise<LiveChannelCacheRecord | null>;
+  setLiveChannelCache(
+    key: string,
+    cache: LiveChannelCacheRecord,
+  ): Promise<void>;
+  deleteLiveChannelCache(key: string): Promise<void>;
 
   // 跳过片头片尾配置相关
   getSkipConfig(

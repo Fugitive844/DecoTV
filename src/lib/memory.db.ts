@@ -15,6 +15,7 @@ import {
   SEARCH_AUDIT_LIMIT,
   sortPlayAudits,
 } from './audit';
+import type { LiveChannelCacheRecord } from './live-cache.types';
 import {
   Favorite,
   IStorage,
@@ -32,6 +33,7 @@ export class MemoryStorage implements IStorage {
   private users: Map<string, string> = new Map(); // username -> password hash
   private searchHistory: Map<string, string[]> = new Map();
   private adminConfig: AdminConfig | null = null;
+  private liveChannelCaches = new Map<string, LiveChannelCacheRecord>();
   private skipConfigs: Map<string, Map<string, SkipConfig>> = new Map();
   private skipPresets: Map<string, SkipPreset[]> = new Map();
   // 审计数据独立保存，deleteUser / clearAllData 不清除
@@ -199,6 +201,24 @@ export class MemoryStorage implements IStorage {
     );
   }
 
+  // ========== 直播频道缓存 ==========
+  async getLiveChannelCache(
+    key: string,
+  ): Promise<LiveChannelCacheRecord | null> {
+    return this.liveChannelCaches.get(key) || null;
+  }
+
+  async setLiveChannelCache(
+    key: string,
+    cache: LiveChannelCacheRecord,
+  ): Promise<void> {
+    this.liveChannelCaches.set(key, cache);
+  }
+
+  async deleteLiveChannelCache(key: string): Promise<void> {
+    this.liveChannelCaches.delete(key);
+  }
+
   // ========== 跳过片头片尾配置 ==========
   async getSkipConfig(
     userName: string,
@@ -309,6 +329,7 @@ export class MemoryStorage implements IStorage {
     this.users.clear();
     this.searchHistory.clear();
     this.adminConfig = null;
+    this.liveChannelCaches.clear();
     this.skipConfigs.clear();
     this.skipPresets.clear();
     console.log('[MemoryStorage] 所有数据已清空');

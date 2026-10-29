@@ -2,6 +2,7 @@
 
 import { AdminConfig } from './admin.types';
 import { KvrocksStorage } from './kvrocks.db';
+import type { LiveChannelCacheRecord } from './live-cache.types';
 import { MemoryStorage } from './memory.db';
 import { RedisStorage } from './redis.db';
 import {
@@ -222,6 +223,24 @@ export class DbManager {
     ) {
       await (this.storage as any).setAdminConfig(config);
     }
+  }
+
+  // ---------- 直播频道缓存 ----------
+  async getLiveChannelCache(
+    key: string,
+  ): Promise<LiveChannelCacheRecord | null> {
+    return this.storage.getLiveChannelCache(key);
+  }
+
+  async setLiveChannelCache(
+    key: string,
+    cache: LiveChannelCacheRecord,
+  ): Promise<void> {
+    await this.storage.setLiveChannelCache(key, cache);
+  }
+
+  async deleteLiveChannelCache(key: string): Promise<void> {
+    await this.storage.deleteLiveChannelCache(key);
   }
 
   // ---------- 跳过片头片尾配置 ----------

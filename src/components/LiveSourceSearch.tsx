@@ -56,50 +56,6 @@ export default function LiveSourceSearch({
         <button
           type='button'
           className={buttonClass}
-          onClick={() =>
-            onChange([
-              [
-                { ...emptyCondition(), keyword: '大陆' },
-                { ...emptyCondition(), keyword: '直播' },
-              ],
-            ])
-          }
-        >
-          大陆且直播
-        </button>
-        <button
-          type='button'
-          className={buttonClass}
-          onClick={() =>
-            onChange([
-              [
-                { ...emptyCondition(), keyword: '大陆' },
-                {
-                  ...emptyCondition(),
-                  operator: 'not-contains',
-                  keyword: '香港',
-                },
-              ],
-            ])
-          }
-        >
-          大陆不含香港
-        </button>
-        <button
-          type='button'
-          className={buttonClass}
-          onClick={() =>
-            onChange([
-              [{ ...emptyCondition(), keyword: '大陆' }],
-              [{ ...emptyCondition(), keyword: '香港' }],
-            ])
-          }
-        >
-          大陆或香港
-        </button>
-        <button
-          type='button'
-          className={buttonClass}
           onClick={() => onChange([[emptyCondition()]])}
         >
           清空搜索

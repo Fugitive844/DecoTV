@@ -123,7 +123,7 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        deleteCachedLiveChannels(key);
+        await deleteCachedLiveChannels(key);
 
         config.LiveConfig.splice(deleteIndex, 1);
         break;
@@ -174,7 +174,7 @@ export async function POST(request: NextRequest) {
           editSource.channelNumber = nums;
         } catch (error) {
           console.error('刷新直播源失败:', error);
-          editSource.channelNumber = 0;
+          // 保留上次成功的频道数和缓存。
         }
         break;
 

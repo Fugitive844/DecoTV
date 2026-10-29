@@ -1,88 +1,104 @@
+import { createHash } from 'crypto';
+
 import { getConfig } from '@/lib/config';
 import { db } from '@/lib/db';
+import type {
+  LiveCacheSource,
+  LiveChannelCacheRecord,
+  LiveChannelData,
+} from '@/lib/live-cache.types';
+import {
+  createLiveChannelCache,
+  normalizeLiveRefreshConcurrency,
+} from '@/lib/live-cache-manager.mjs';
 
 const defaultUA = 'AptvPlayer/1.4.10';
 
-export interface LiveChannels {
-  channelNumber: number;
-  channels: {
-    id: string;
-    tvgId: string;
-    tvgName?: string;
-    name: string;
-    logo: string;
-    group: string;
-    url: string;
-  }[];
-  epgUrl: string;
-  epgs: {
-    [key: string]: {
-      start: string;
-      end: string;
-      title: string;
-    }[];
-  };
+export type LiveChannels = LiveChannelCacheRecord;
+const LIVE_FETCH_TIMEOUT_MS = 30_000;
+
+export function getLiveSourceFingerprint(source: LiveCacheSource): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify([source.url, source.ua || defaultUA, source.epg || '']),
+    )
+    .digest('hex');
 }
 
-const cachedLiveChannels: { [key: string]: LiveChannels } = {};
+const globalLiveCache = globalThis as typeof globalThis & {
+  __decotvLiveChannelCache?: ReturnType<typeof createLiveChannelCache>;
+};
 
-export function deleteCachedLiveChannels(key: string) {
-  delete cachedLiveChannels[key];
+const channelCache = (globalLiveCache.__decotvLiveChannelCache ??=
+  createLiveChannelCache({
+    storage: {
+      get: (key) => db.getLiveChannelCache(key),
+      set: (key, cache) => db.setLiveChannelCache(key, cache),
+      delete: (key) => db.deleteLiveChannelCache(key),
+    },
+    fetchSource: fetchLiveChannelData,
+    fingerprint: getLiveSourceFingerprint,
+    concurrency: normalizeLiveRefreshConcurrency(
+      process.env.LIVE_SOURCE_REFRESH_CONCURRENCY,
+    ),
+  }));
+
+export function getLiveRefreshConcurrency(): number {
+  return channelCache.concurrency;
+}
+
+export async function deleteCachedLiveChannels(key: string): Promise<void> {
+  await channelCache.delete(key);
 }
 
 export async function getCachedLiveChannels(
   key: string,
 ): Promise<LiveChannels | null> {
-  if (!cachedLiveChannels[key]) {
-    const config = await getConfig();
-    const liveInfo = config.LiveConfig?.find((live) => live.key === key);
-    if (!liveInfo) {
-      return null;
-    }
-    const channelNum = await refreshLiveChannels(liveInfo);
-    if (channelNum === 0) {
-      return null;
-    }
-    liveInfo.channelNumber = channelNum;
-    await db.saveAdminConfig(config);
-  }
-  return cachedLiveChannels[key] || null;
+  const config = await getConfig();
+  const liveInfo = config.LiveConfig?.find(
+    (live) => live.key === key && !live.disabled,
+  );
+  if (!liveInfo) return null;
+  return channelCache.get({ ...liveInfo });
 }
 
-export async function refreshLiveChannels(liveInfo: {
-  key: string;
-  name: string;
-  url: string;
-  ua?: string;
-  epg?: string;
-  from: 'config' | 'custom';
-  channelNumber?: number;
-  disabled?: boolean;
-}): Promise<number> {
-  if (cachedLiveChannels[liveInfo.key]) {
-    delete cachedLiveChannels[liveInfo.key];
-  }
+export async function refreshLiveChannels(
+  liveInfo: LiveCacheSource,
+): Promise<number> {
+  const cache = await channelCache.refresh({ ...liveInfo });
+  return cache.channelNumber;
+}
+
+async function fetchLiveChannelData(
+  liveInfo: LiveCacheSource,
+  previous: LiveChannelCacheRecord | null,
+): Promise<LiveChannelData> {
   const ua = liveInfo.ua || defaultUA;
   const response = await fetch(liveInfo.url, {
     headers: {
       'User-Agent': ua,
     },
+    signal: AbortSignal.timeout(LIVE_FETCH_TIMEOUT_MS),
+    cache: 'no-store',
   });
+  if (!response.ok)
+    throw new Error(`直播源 HTTP ${response.status}，保留旧缓存`);
   const data = await response.text();
   const result = parseM3U(liveInfo.key, data);
+  if (result.channels.length === 0)
+    throw new Error('直播源没有有效频道，保留旧缓存');
   const epgUrl = liveInfo.epg || result.tvgUrl;
   const epgs = await parseEpg(
     epgUrl,
     liveInfo.ua || defaultUA,
     result.channels.map((channel) => channel.tvgId).filter((tvgId) => tvgId),
   );
-  cachedLiveChannels[liveInfo.key] = {
+  return {
     channelNumber: result.channels.length,
     channels: result.channels,
     epgUrl: epgUrl,
-    epgs: epgs,
+    epgs: epgs ?? previous?.epgs ?? {},
   };
-  return result.channels.length;
 }
 
 async function parseEpg(
@@ -95,7 +111,7 @@ async function parseEpg(
     end: string;
     title: string;
   }[];
-}> {
+} | null> {
   if (!epgUrl) {
     return {};
   }
@@ -120,15 +136,17 @@ async function parseEpg(
       headers: {
         'User-Agent': ua,
       },
+      signal: AbortSignal.timeout(LIVE_FETCH_TIMEOUT_MS),
+      cache: 'no-store',
     });
     if (!response.ok) {
-      return {};
+      return null;
     }
 
     // 使用 ReadableStream 逐行处理，避免将整个文件加载到内存
     const reader = response.body?.getReader();
     if (!reader) {
-      return {};
+      return null;
     }
 
     const decoder = new TextDecoder();
@@ -138,10 +156,12 @@ async function parseEpg(
     let currentProgram: { start: string; end: string; title: string } | null =
       null;
     let shouldSkipCurrentProgram = false;
+    let hasTvRoot = false;
 
     const handleLine = (line: string) => {
       const trimmedLine = line.trim();
       if (!trimmedLine) return;
+      if (/<tv(?:\s|>)/.test(trimmedLine)) hasTvRoot = true;
 
       // 解析 <programme> 标签
       if (trimmedLine.startsWith('<programme')) {
@@ -204,8 +224,10 @@ async function parseEpg(
     if (buffer.trim()) {
       handleLine(buffer);
     }
+    if (!hasTvRoot) return null;
   } catch {
-    // ignore
+    // 节目单失败时由调用方继续保留上次成功节目单。
+    return null;
   }
 
   return result;

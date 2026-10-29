@@ -2,10 +2,9 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-import { persistAdminConfigMutation } from '@/lib/admin-config-mutation';
 import { getAuthInfoFromCookie } from '@/lib/auth';
 import { getConfig } from '@/lib/config';
-import { refreshLiveChannels } from '@/lib/live';
+import { refreshAllLiveChannels } from '@/lib/live-refresh';
 
 export const runtime = 'nodejs';
 
@@ -23,26 +22,15 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // 并发刷新所有启用的直播源
-    const refreshPromises = (config.LiveConfig || [])
-      .filter((liveInfo) => !liveInfo.disabled)
-      .map(async (liveInfo) => {
-        try {
-          const nums = await refreshLiveChannels(liveInfo);
-          liveInfo.channelNumber = nums;
-        } catch {
-          liveInfo.channelNumber = 0;
-        }
-      });
-
-    // 等待所有刷新任务完成
-    await Promise.all(refreshPromises);
-
-    await persistAdminConfigMutation(config);
+    const result = await refreshAllLiveChannels();
 
     return NextResponse.json({
       success: true,
-      message: '直播源刷新成功',
+      message:
+        result.failed > 0
+          ? `刷新完成：${result.refreshed} 个成功，${result.failed} 个失败，失败源保留旧缓存`
+          : '直播源刷新成功',
+      data: result,
     });
   } catch (error) {
     console.error('直播源刷新失败:', error);

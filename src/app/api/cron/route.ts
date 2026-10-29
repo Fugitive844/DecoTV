@@ -6,21 +6,30 @@ import { persistAdminConfigMutation } from '@/lib/admin-config-mutation';
 import { getConfig, refineConfig } from '@/lib/config';
 import { db } from '@/lib/db';
 import { fetchVideoDetail } from '@/lib/fetchVideoDetail';
-import { refreshLiveChannels } from '@/lib/live';
+import { refreshAllLiveChannels } from '@/lib/live-refresh';
 import { SearchResult } from '@/lib/types';
 
 export const runtime = 'nodejs';
+let ongoingCron: Promise<void> | null = null;
 
 export async function GET(request: NextRequest) {
   console.log(request.url);
   try {
     console.log('Cron job triggered:', new Date().toISOString());
 
-    cronJob();
+    if (!ongoingCron) {
+      ongoingCron = cronJob()
+        .catch((error) => {
+          console.error('后台刷新任务失败:', error);
+        })
+        .finally(() => {
+          ongoingCron = null;
+        });
+    }
 
     return NextResponse.json({
       success: true,
-      message: 'Cron job executed successfully',
+      message: '后台刷新任务已启动或正在执行',
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
@@ -42,31 +51,6 @@ async function cronJob() {
   await refreshConfig();
   await refreshAllLiveChannels();
   await refreshRecordAndFavorites();
-}
-
-async function refreshAllLiveChannels() {
-  const config = await getConfig();
-
-  // 并发刷新所有启用的直播源
-  const refreshPromises = (config.LiveConfig || [])
-    .filter((liveInfo) => !liveInfo.disabled)
-    .map(async (liveInfo) => {
-      try {
-        const nums = await refreshLiveChannels(liveInfo);
-        liveInfo.channelNumber = nums;
-      } catch (error) {
-        console.error(
-          `刷新直播源失败 [${liveInfo.name || liveInfo.key}]:`,
-          error,
-        );
-        liveInfo.channelNumber = 0;
-      }
-    });
-
-  // 等待所有刷新任务完成
-  await Promise.all(refreshPromises);
-
-  await persistAdminConfigMutation(config);
 }
 
 async function refreshConfig() {

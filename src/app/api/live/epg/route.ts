@@ -39,15 +39,18 @@ export async function GET(request: NextRequest) {
     // 从epgs字段中获取对应tvgId的节目单信息
     const epgData = channelData.epgs[tvgId] || [];
 
-    return NextResponse.json({
-      success: true,
-      data: {
-        tvgId,
-        source: sourceKey,
-        epgUrl: channelData.epgUrl,
-        programs: epgData,
+    return NextResponse.json(
+      {
+        success: true,
+        data: {
+          tvgId,
+          source: sourceKey,
+          epgUrl: channelData.epgUrl,
+          programs: epgData,
+        },
       },
-    });
+      { headers: { 'Cache-Control': 'no-store' } },
+    );
   } catch {
     return NextResponse.json({ error: '获取节目单信息失败' }, { status: 500 });
   }

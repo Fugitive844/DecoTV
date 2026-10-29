@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { getCachedLiveChannels } from '@/lib/live';
+import { buildLiveChannelDisplayList } from '@/lib/live-channel-display.mjs';
 
 export const runtime = 'nodejs';
 
@@ -19,10 +20,13 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: '频道信息未找到' }, { status: 404 });
     }
 
-    return NextResponse.json({
-      success: true,
-      data: channelData.channels,
-    });
+    return NextResponse.json(
+      {
+        success: true,
+        data: buildLiveChannelDisplayList(sourceKey, channelData),
+      },
+      { headers: { 'Cache-Control': 'no-store' } },
+    );
   } catch {
     return NextResponse.json({ error: '获取频道信息失败' }, { status: 500 });
   }
