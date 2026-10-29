@@ -6,6 +6,11 @@ import { persistAdminConfigMutation } from '@/lib/admin-config-mutation';
 import { verifyApiAuth } from '@/lib/auth';
 import { getConfig } from '@/lib/config';
 import { deleteCachedLiveChannels, refreshLiveChannels } from '@/lib/live';
+import {
+  getLiveSourceSortOrder,
+  isValidLiveSourceSortOrder,
+  sortLiveSources,
+} from '@/lib/live-source-options';
 
 export const runtime = 'nodejs';
 
@@ -47,7 +52,18 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { action, key, name, url, ua, epg } = body;
+    const { action, key, name, url, ua, epg, sortOrder } = body;
+
+    if (
+      (action === 'add' || action === 'edit') &&
+      sortOrder !== undefined &&
+      !isValidLiveSourceSortOrder(sortOrder)
+    ) {
+      return NextResponse.json(
+        { error: '排序值必须是安全整数' },
+        { status: 400 },
+      );
+    }
 
     if (!config) {
       return NextResponse.json({ error: '配置不存在' }, { status: 404 });
@@ -74,6 +90,7 @@ export async function POST(request: NextRequest) {
           url: url as string,
           ua: ua || '',
           epg: epg || '',
+          sortOrder: getLiveSourceSortOrder({ sortOrder }),
           from: 'custom' as 'custom' | 'config',
           channelNumber: 0,
           disabled: false,
@@ -149,6 +166,7 @@ export async function POST(request: NextRequest) {
         editSource.url = url as string;
         editSource.ua = ua || '';
         editSource.epg = epg || '';
+        if (sortOrder !== undefined) editSource.sortOrder = sortOrder;
 
         // 刷新频道数
         try {
@@ -160,10 +178,43 @@ export async function POST(request: NextRequest) {
         }
         break;
 
+      case 'batch-sort': {
+        const { keys } = body;
+        if (
+          !Array.isArray(keys) ||
+          keys.length === 0 ||
+          !keys.every((item) => typeof item === 'string' && item.length > 0) ||
+          !isValidLiveSourceSortOrder(sortOrder)
+        ) {
+          return NextResponse.json(
+            { error: '请选择直播源，排序值必须是安全整数' },
+            { status: 400 },
+          );
+        }
+        const selectedKeys = new Set<string>(keys);
+        const existingKeys = new Set(
+          config.LiveConfig.map((source) => source.key),
+        );
+        if ([...selectedKeys].some((item) => !existingKeys.has(item))) {
+          return NextResponse.json(
+            { error: '部分直播源已不存在，请刷新后重试' },
+            { status: 404 },
+          );
+        }
+        config.LiveConfig = config.LiveConfig.map((source) =>
+          selectedKeys.has(source.key) ? { ...source, sortOrder } : source,
+        );
+        break;
+      }
+
       case 'sort':
         // 排序直播源
         const { order } = body;
-        if (!Array.isArray(order)) {
+        if (
+          !Array.isArray(order) ||
+          !order.every((item) => typeof item === 'string') ||
+          new Set(order).size !== order.length
+        ) {
           return NextResponse.json(
             { error: '排序数据格式错误' },
             { status: 400 },
@@ -193,6 +244,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: '未知操作' }, { status: 400 });
     }
 
+    config.LiveConfig = sortLiveSources(config.LiveConfig);
     await persistAdminConfigMutation(config);
 
     return NextResponse.json({ success: true });

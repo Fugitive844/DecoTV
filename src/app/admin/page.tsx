@@ -64,11 +64,20 @@ import {
 } from '@/lib/admin.types';
 import { normalizeApkDownloadUrl } from '@/lib/apk-download';
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
+import {
+  DEFAULT_LIVE_SOURCE_SORT_ORDER,
+  getLiveSourceSortOrder,
+  isValidLiveSourceSortOrder,
+  type LiveSourceSearchGroups,
+  matchesLiveSourceSearch,
+  sortLiveSources,
+} from '@/lib/live-source-options';
 import { DEFAULT_PANSOU_SERVER_URL } from '@/lib/pansou';
 
 import AuditLogPanel from '@/components/AuditLogPanel';
 import DataMigration from '@/components/DataMigration';
 import type { ImportExportModalProps } from '@/components/ImportExportModal';
+import LiveSourceSearch from '@/components/LiveSourceSearch';
 import PageLayout from '@/components/PageLayout';
 import type { PanSouConfigPanelProps } from '@/components/PanSouConfigPanel';
 
@@ -86,12 +95,14 @@ const PanSouConfigPanel = dynamic<PanSouConfigPanelProps>(
 function SortableTableRow({
   id,
   children,
+  disabled = false,
 }: {
   id: string;
   children: React.ReactNode;
+  disabled?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition } =
-    useSortable({ id });
+    useSortable({ id, disabled });
   return (
     <tr
       ref={setNodeRef}
@@ -99,7 +110,7 @@ function SortableTableRow({
       className='hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors select-none'
     >
       <td
-        className='px-2 py-4 cursor-grab text-gray-400'
+        className={`px-2 py-4 text-gray-400 ${disabled ? 'cursor-not-allowed opacity-40' : 'cursor-grab'}`}
         style={{ touchAction: 'none' }}
         {...attributes}
         {...listeners}
@@ -425,6 +436,7 @@ interface LiveDataSource {
   ua?: string;
   epg?: string;
   channelNumber?: number;
+  sortOrder?: number;
   disabled?: boolean;
   from: 'config' | 'custom';
 }
@@ -2808,12 +2820,11 @@ const VideoSourceConfig = ({
   const { isLoading, withLoading } = useLoadingState();
   const [sources, setSources] = useState<DataSource[]>([]);
   const [sourcePage, setSourcePage] = useState(1);
-  const sourcePageCount = Math.max(1, Math.ceil(sources.length / 50));
-  const safeSourcePage = Math.min(sourcePage, sourcePageCount);
-  const visibleSources = sources.slice(
-    (safeSourcePage - 1) * 50,
-    safeSourcePage * 50,
-  );
+  const [sourceNameFilter, setSourceNameFilter] = useState('');
+  const [adultFilter, setAdultFilter] = useState('all');
+  const [enabledFilter, setEnabledFilter] = useState('all');
+  const [validityFilter, setValidityFilter] = useState('all');
+  const [adFilter, setAdFilter] = useState('all');
   const [showAddForm, setShowAddForm] = useState(false);
   const [orderChanged, setOrderChanged] = useState(false);
   const [newSource, setNewSource] = useState<DataSource>({
@@ -2829,11 +2840,6 @@ const VideoSourceConfig = ({
   const [selectedSources, setSelectedSources] = useState<Set<string>>(
     new Set(),
   );
-
-  // 使用 useMemo 计算全选状态，避免每次渲染都重新计算
-  const selectAll = useMemo(() => {
-    return selectedSources.size === sources.length && selectedSources.size > 0;
-  }, [selectedSources.size, sources.length]);
 
   // 确认弹窗状态
   const [confirmModal, setConfirmModal] = useState<{
@@ -2863,6 +2869,52 @@ const VideoSourceConfig = ({
       resultCount: number;
     }>
   >([]);
+  const validationByKey = useMemo(
+    () => new Map(validationResults.map((result) => [result.key, result])),
+    [validationResults],
+  );
+  const hasSourceFilters =
+    !!sourceNameFilter.trim() ||
+    adultFilter !== 'all' ||
+    enabledFilter !== 'all' ||
+    validityFilter !== 'all' ||
+    adFilter !== 'all';
+  const filteredSources = useMemo(() => {
+    const name = sourceNameFilter.trim().toLowerCase();
+    return sources.filter((source) => {
+      const status = validationByKey.get(source.key)?.status || 'unchecked';
+      return (
+        (!name || source.name.toLowerCase().includes(name)) &&
+        (adultFilter === 'all' ||
+          !!source.is_adult === (adultFilter === 'adult')) &&
+        (enabledFilter === 'all' ||
+          !source.disabled === (enabledFilter === 'enabled')) &&
+        (validityFilter === 'all' || status === validityFilter) &&
+        (adFilter === 'all' ||
+          !source.disable_ad_filter === (adFilter === 'enabled'))
+      );
+    });
+  }, [
+    sources,
+    sourceNameFilter,
+    adultFilter,
+    enabledFilter,
+    validityFilter,
+    adFilter,
+    validationByKey,
+  ]);
+  const sourcePageCount = Math.max(1, Math.ceil(filteredSources.length / 50));
+  const safeSourcePage = Math.min(sourcePage, sourcePageCount);
+  const visibleSources = filteredSources.slice(
+    (safeSourcePage - 1) * 50,
+    safeSourcePage * 50,
+  );
+  const selectAll =
+    filteredSources.length > 0 &&
+    filteredSources.every((source) => selectedSources.has(source.key));
+  const hiddenSelectedCount =
+    selectedSources.size -
+    filteredSources.filter((source) => selectedSources.has(source.key)).length;
 
   // 导入导出相关状态
   const [importExportModal, setImportExportModal] = useState<{
@@ -3273,7 +3325,9 @@ const VideoSourceConfig = ({
         const finish = () => {
           flushResults();
           clearTimeout(timeoutTimer);
-          finish();
+          eventSource.close();
+          validationCleanup.current = null;
+          setIsValidating(false);
         };
         validationCleanup.current = () => {
           clearTimeout(flushTimer);
@@ -3331,8 +3385,10 @@ const VideoSourceConfig = ({
 
         eventSource.onerror = (error) => {
           console.error('EventSource错误:', error);
-          eventSource.close();
-          setIsValidating(false);
+          finish();
+          setValidationResults((previous) =>
+            previous.filter((result) => result.status !== 'validating'),
+          );
           showAlert({
             type: 'error',
             title: '验证失败',
@@ -3344,6 +3400,9 @@ const VideoSourceConfig = ({
         timeoutTimer = setTimeout(() => {
           if (eventSource.readyState !== EventSource.CLOSED) {
             finish();
+            setValidationResults((previous) =>
+              previous.filter((result) => result.status !== 'validating'),
+            );
             showAlert({
               type: 'warning',
               title: '验证超时',
@@ -3654,10 +3713,6 @@ const VideoSourceConfig = ({
   };
 
   // 获取有效性状态显示
-  const validationByKey = useMemo(
-    () => new Map(validationResults.map((result) => [result.key, result])),
-    [validationResults],
-  );
   const getValidationStatus = (sourceKey: string) => {
     const result = validationByKey.get(sourceKey);
     if (!result) return null;
@@ -3702,7 +3757,11 @@ const VideoSourceConfig = ({
 
   // 可拖拽行封装 (dnd-kit)
   const renderRow = (source: DataSource) => (
-    <SortableTableRow key={source.key} id={source.key}>
+    <SortableTableRow
+      key={source.key}
+      id={source.key}
+      disabled={hasSourceFilters}
+    >
       <td className='px-2 py-4 text-center'>
         <input
           type='checkbox'
@@ -3854,14 +3913,16 @@ const VideoSourceConfig = ({
   // 全选/取消全选
   const handleSelectAll = useCallback(
     (checked: boolean) => {
-      if (checked) {
-        const allKeys = sources.map((s) => s.key);
-        setSelectedSources(new Set(allKeys));
-      } else {
-        setSelectedSources(new Set());
-      }
+      setSelectedSources((previous) => {
+        const next = new Set(previous);
+        filteredSources.forEach((source) => {
+          if (checked) next.add(source.key);
+          else next.delete(source.key);
+        });
+        return next;
+      });
     },
-    [sources],
+    [filteredSources],
   );
 
   // 单个选择
@@ -4356,6 +4417,133 @@ const VideoSourceConfig = ({
         </div>
       )}
 
+      <div className='space-y-3 rounded-lg border border-gray-200 p-4 dark:border-gray-700'>
+        <div className='grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5'>
+          <label className='space-y-1 text-sm text-gray-700 dark:text-gray-300'>
+            <span>名称搜索</span>
+            <input
+              type='search'
+              value={sourceNameFilter}
+              placeholder='输入视频源名称'
+              onChange={(e) => {
+                setSourceNameFilter(e.target.value);
+                setSourcePage(1);
+                setSelectedSources(new Set());
+              }}
+              className='w-full rounded-lg border border-gray-300 bg-white px-3 py-2 dark:border-gray-600 dark:bg-gray-800'
+            />
+          </label>
+          <label className='space-y-1 text-sm text-gray-700 dark:text-gray-300'>
+            <span>成人资源</span>
+            <select
+              value={adultFilter}
+              onChange={(e) => {
+                setAdultFilter(e.target.value);
+                setSourcePage(1);
+                setSelectedSources(new Set());
+              }}
+              className='w-full rounded-lg border border-gray-300 bg-white px-3 py-2 dark:border-gray-600 dark:bg-gray-800'
+            >
+              <option value='all'>全部</option>
+              <option value='adult'>成人</option>
+              <option value='normal'>普通</option>
+            </select>
+          </label>
+          <label className='space-y-1 text-sm text-gray-700 dark:text-gray-300'>
+            <span>启用状态</span>
+            <select
+              value={enabledFilter}
+              onChange={(e) => {
+                setEnabledFilter(e.target.value);
+                setSourcePage(1);
+                setSelectedSources(new Set());
+              }}
+              className='w-full rounded-lg border border-gray-300 bg-white px-3 py-2 dark:border-gray-600 dark:bg-gray-800'
+            >
+              <option value='all'>全部</option>
+              <option value='enabled'>启用中</option>
+              <option value='disabled'>已禁用</option>
+            </select>
+          </label>
+          <label className='space-y-1 text-sm text-gray-700 dark:text-gray-300'>
+            <span>有效性</span>
+            <select
+              value={validityFilter}
+              onChange={(e) => {
+                setValidityFilter(e.target.value);
+                setSourcePage(1);
+                setSelectedSources(new Set());
+              }}
+              className='w-full rounded-lg border border-gray-300 bg-white px-3 py-2 dark:border-gray-600 dark:bg-gray-800'
+            >
+              <option value='all'>全部</option>
+              <option value='unchecked'>未检测</option>
+              <option value='validating'>检测中</option>
+              <option value='valid'>有效</option>
+              <option value='no_results'>无法搜索</option>
+              <option value='invalid'>无效</option>
+            </select>
+          </label>
+          <label className='space-y-1 text-sm text-gray-700 dark:text-gray-300'>
+            <span>广告过滤</span>
+            <select
+              value={adFilter}
+              onChange={(e) => {
+                setAdFilter(e.target.value);
+                setSourcePage(1);
+                setSelectedSources(new Set());
+              }}
+              className='w-full rounded-lg border border-gray-300 bg-white px-3 py-2 dark:border-gray-600 dark:bg-gray-800'
+            >
+              <option value='all'>全部</option>
+              <option value='enabled'>已启用</option>
+              <option value='disabled'>已豁免</option>
+            </select>
+          </label>
+        </div>
+        <div className='flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500 dark:text-gray-400'>
+          <span>
+            筛选出 {filteredSources.length} / {sources.length}{' '}
+            个源；全选作用于全部筛选结果。有效性为本次页面检测结果，广告过滤以单源设置为准。
+          </span>
+          {hasSourceFilters && (
+            <button
+              type='button'
+              className='text-blue-600 hover:underline dark:text-blue-400'
+              onClick={() => {
+                setSourceNameFilter('');
+                setAdultFilter('all');
+                setEnabledFilter('all');
+                setValidityFilter('all');
+                setAdFilter('all');
+                setSourcePage(1);
+                setSelectedSources(new Set());
+              }}
+            >
+              清除筛选
+            </button>
+          )}
+        </div>
+        {hasSourceFilters && (
+          <p className='text-xs text-gray-500 dark:text-gray-400'>
+            筛选期间暂停拖动排序；更改筛选条件会清除已选项。
+          </p>
+        )}
+        {hiddenSelectedCount > 0 && (
+          <p className='text-xs text-amber-700 dark:text-amber-400'>
+            已选项中有 {hiddenSelectedCount}{' '}
+            个不在当前筛选结果中，批量操作仍会作用于这些源。{' '}
+            <button
+              type='button'
+              className='underline'
+              onClick={() => setSelectedSources(new Set())}
+            >
+              清除全部选择
+            </button>
+          </p>
+        )}
+      </div>
+
       {/* 视频源表格 */}
       <div
         className='border border-gray-200 dark:border-gray-700 rounded-lg max-h-112 overflow-y-auto overflow-x-auto relative'
@@ -4376,6 +4564,8 @@ const VideoSourceConfig = ({
                   <input
                     type='checkbox'
                     checked={selectAll}
+                    disabled={filteredSources.length === 0}
+                    aria-label='选择全部筛选结果'
                     onChange={(e) => handleSelectAll(e.target.checked)}
                     className='w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600'
                   />
@@ -4413,11 +4603,21 @@ const VideoSourceConfig = ({
               </tr>
             </thead>
             <SortableContext
-              items={sources.map((s) => s.key)}
+              items={visibleSources.map((s) => s.key)}
               strategy={verticalListSortingStrategy}
             >
               <tbody className='divide-y divide-gray-200 dark:divide-gray-700'>
                 {visibleSources.map(renderRow)}
+                {visibleSources.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={11}
+                      className='px-6 py-8 text-center text-sm text-gray-500 dark:text-gray-400'
+                    >
+                      没有符合条件的视频源
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </SortableContext>
           </table>
@@ -4426,8 +4626,8 @@ const VideoSourceConfig = ({
 
       <div className='flex items-center justify-end gap-3 text-sm'>
         <span>
-          共 {sources.length} 个源，第 {safeSourcePage} / {sourcePageCount}{' '}
-          页（每页 50 个）
+          筛选出 {filteredSources.length} 个源，第 {safeSourcePage} /{' '}
+          {sourcePageCount} 页（每页 50 个）
         </span>
         <button
           className={buttonStyles.secondary}
@@ -5073,7 +5273,13 @@ const ConfigFileComponent = ({
         query: string;
       }[];
       lives?: {
-        [key: string]: { name: string; url: string; ua?: string; epg?: string };
+        [key: string]: {
+          name: string;
+          url: string;
+          ua?: string;
+          epg?: string;
+          sortOrder?: number;
+        };
       };
     }
 
@@ -5128,6 +5334,11 @@ const ConfigFileComponent = ({
           url: live.url,
           ua: live.ua,
           epg: live.epg,
+          sortOrder: getLiveSourceSortOrder({
+            sortOrder:
+              prev.LiveConfig?.find((source) => source.key === key)
+                ?.sortOrder ?? live.sortOrder,
+          }),
           channelNumber: 0,
           from: 'config' as const,
           disabled: false,
@@ -6364,6 +6575,34 @@ const LiveSourceConfig = ({
   const { alertModal, showAlert, hideAlert } = useAlertModal();
   const { isLoading, withLoading } = useLoadingState();
   const [liveSources, setLiveSources] = useState<LiveDataSource[]>([]);
+  const [searchGroups, setSearchGroups] = useState<LiveSourceSearchGroups>([
+    [{ field: 'name', operator: 'contains', keyword: '' }],
+  ]);
+  const [selectedLiveKeys, setSelectedLiveKeys] = useState<Set<string>>(
+    new Set(),
+  );
+  const [batchSortOrder, setBatchSortOrder] = useState(
+    String(DEFAULT_LIVE_SOURCE_SORT_ORDER),
+  );
+  const [sortOrderDrafts, setSortOrderDrafts] = useState<Map<string, string>>(
+    () => new Map(),
+  );
+  const filteredLiveSources = useMemo(
+    () =>
+      liveSources.filter((source) =>
+        matchesLiveSourceSearch(source, searchGroups),
+      ),
+    [liveSources, searchGroups],
+  );
+  const selectedFilteredKeys = filteredLiveSources
+    .filter((source) => selectedLiveKeys.has(source.key))
+    .map((source) => source.key);
+  const allFilteredSelected =
+    filteredLiveSources.length > 0 &&
+    selectedFilteredKeys.length === filteredLiveSources.length;
+  const hasSearch = searchGroups.some((group) =>
+    group.some((condition) => condition.keyword.trim()),
+  );
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingLiveSource, setEditingLiveSource] =
     useState<LiveDataSource | null>(null);
@@ -6375,6 +6614,7 @@ const LiveSourceConfig = ({
     url: '',
     ua: '',
     epg: '',
+    sortOrder: DEFAULT_LIVE_SOURCE_SORT_ORDER,
     disabled: false,
     from: 'custom',
   });
@@ -6415,7 +6655,9 @@ const LiveSourceConfig = ({
   // 初始化
   useEffect(() => {
     if (config?.LiveConfig) {
-      setLiveSources(config.LiveConfig);
+      setLiveSources(sortLiveSources(config.LiveConfig));
+      setSortOrderDrafts(new Map());
+      setSelectedLiveKeys(new Set());
       // 进入时重置 orderChanged
       setOrderChanged(false);
     }
@@ -6438,6 +6680,7 @@ const LiveSourceConfig = ({
             url: payload.url,
             ua: payload.ua || '',
             epg: payload.epg || '',
+            sortOrder: getLiveSourceSortOrder({ sortOrder: payload.sortOrder }),
             disabled: false,
             from: 'custom',
             channelNumber: 0,
@@ -6460,6 +6703,7 @@ const LiveSourceConfig = ({
           if (source) source.disabled = true;
           break;
         }
+        case 'edit':
         case 'update': {
           const source = sources.find((s) => s.key === payload.key);
           if (source) {
@@ -6467,12 +6711,22 @@ const LiveSourceConfig = ({
             source.url = payload.url ?? source.url;
             source.ua = payload.ua ?? source.ua;
             source.epg = payload.epg ?? source.epg;
+            if (payload.sortOrder !== undefined)
+              source.sortOrder = payload.sortOrder;
           }
+          break;
+        }
+        case 'batch-sort': {
+          const keys = new Set<string>(payload.keys);
+          sources.forEach((source, index) => {
+            if (keys.has(source.key))
+              sources[index] = { ...source, sortOrder: payload.sortOrder };
+          });
           break;
         }
         case 'sort': {
           if (payload.order && Array.isArray(payload.order)) {
-            const orderMap = new Map(
+            const orderMap = new Map<string, number>(
               payload.order.map((key: string, idx: number) => [key, idx]),
             );
             sources.sort((a, b) => {
@@ -6485,7 +6739,7 @@ const LiveSourceConfig = ({
         }
       }
 
-      return { ...prev, LiveConfig: sources };
+      return { ...prev, LiveConfig: sortLiveSources(sources) };
     });
   };
 
@@ -6596,6 +6850,7 @@ const LiveSourceConfig = ({
         url: newLiveSource.url,
         ua: newLiveSource.ua,
         epg: newLiveSource.epg,
+        sortOrder: newLiveSource.sortOrder,
       });
       setNewLiveSource({
         name: '',
@@ -6605,6 +6860,7 @@ const LiveSourceConfig = ({
         ua: '',
         disabled: false,
         from: 'custom',
+        sortOrder: DEFAULT_LIVE_SOURCE_SORT_ORDER,
       });
       setShowAddForm(false);
     }).catch(() => {
@@ -6637,8 +6893,26 @@ const LiveSourceConfig = ({
   const handleDragEnd = (event: any) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
+    if (
+      hasSearch ||
+      isLoading('batchSortLiveSources') ||
+      isLoading('saveLiveSourceOrder')
+    )
+      return;
     const oldIndex = liveSources.findIndex((s) => s.key === active.id);
     const newIndex = liveSources.findIndex((s) => s.key === over.id);
+    if (oldIndex < 0 || newIndex < 0) return;
+    if (
+      getLiveSourceSortOrder(liveSources[oldIndex]) !==
+      getLiveSourceSortOrder(liveSources[newIndex])
+    ) {
+      showAlert({
+        type: 'warning',
+        title: '排序值不同',
+        message: '拖拽仅调整相同排序值的先后顺序。跨排序值调整请修改排序值。',
+      });
+      return;
+    }
     setLiveSources((prev) => arrayMove(prev, oldIndex, newIndex));
     setOrderChanged(true);
   };
@@ -6654,6 +6928,41 @@ const LiveSourceConfig = ({
       .catch(() => {
         console.error('操作失败', 'sort', order);
       });
+  };
+
+  const handleSetSortOrder = (keys: string[], value: string) => {
+    const sortOrder = Number(value);
+    if (
+      keys.length === 0 ||
+      !value.trim() ||
+      !isValidLiveSourceSortOrder(sortOrder)
+    ) {
+      showAlert({
+        type: 'warning',
+        title: '无法设置排序值',
+        message: '请选择直播源，并输入有效的整数排序值。',
+      });
+      return;
+    }
+    if (orderChanged) {
+      showAlert({
+        type: 'warning',
+        title: '请先保存拖拽排序',
+        message: '保存当前拖拽顺序后，再设置排序值。',
+      });
+      return;
+    }
+    void withLoading('batchSortLiveSources', async () => {
+      await callLiveSourceApi({ action: 'batch-sort', keys, sortOrder });
+      showAlert({
+        type: 'success',
+        title: '排序值已保存',
+        message: `已将 ${keys.length} 个直播源的排序值设置为 ${sortOrder}。`,
+        timer: 2000,
+      });
+    }).catch(() => {
+      // API 层已显示错误，保留选择和输入以便重试。
+    });
   };
 
   const normalizeLiveImportData = (importData: unknown) => {
@@ -6714,6 +7023,7 @@ const LiveSourceConfig = ({
             url: string;
             ua?: string;
             epg?: string;
+            sortOrder?: number;
           }
         > = {};
 
@@ -6723,9 +7033,11 @@ const LiveSourceConfig = ({
             url: string;
             ua?: string;
             epg?: string;
+            sortOrder?: number;
           } = {
             name: source.name,
             url: source.url,
+            sortOrder: getLiveSourceSortOrder(source),
           };
           if (source.ua) {
             liveItem.ua = source.ua;
@@ -6746,6 +7058,7 @@ const LiveSourceConfig = ({
           epg: source.epg || '',
           ua: source.ua || '',
           disabled: source.disabled || false,
+          sortOrder: getLiveSourceSortOrder(source),
         }));
         filename = `live_sources_${timestamp}.json`;
       }
@@ -6822,6 +7135,21 @@ const LiveSourceConfig = ({
         const ua = typeof rawItem.ua === 'string' ? rawItem.ua.trim() : '';
         const epg = typeof rawItem.epg === 'string' ? rawItem.epg.trim() : '';
 
+        if (
+          rawItem.sortOrder !== undefined &&
+          !isValidLiveSourceSortOrder(rawItem.sortOrder)
+        ) {
+          result.failed++;
+          result.details.push({
+            name: name || '未知',
+            key: key || '未知',
+            status: 'failed',
+            reason: '排序值必须是安全整数',
+          });
+          continue;
+        }
+        const sortOrder = rawItem.sortOrder ?? DEFAULT_LIVE_SOURCE_SORT_ORDER;
+
         if (!name || !key || !url) {
           result.failed++;
           result.details.push({
@@ -6853,6 +7181,7 @@ const LiveSourceConfig = ({
               url,
               ua,
               epg,
+              sortOrder,
             },
             {
               skipRefresh: true,
@@ -6907,7 +7236,77 @@ const LiveSourceConfig = ({
 
   // 可拖拽行封装 (dnd-kit)
   const renderRow = (liveSource: LiveDataSource) => (
-    <SortableTableRow key={liveSource.key} id={liveSource.key}>
+    <SortableTableRow
+      key={liveSource.key}
+      id={liveSource.key}
+      disabled={
+        hasSearch ||
+        isLoading('batchSortLiveSources') ||
+        isLoading('saveLiveSourceOrder')
+      }
+    >
+      <td className='px-3 py-4'>
+        <input
+          type='checkbox'
+          aria-label={`选择直播源 ${liveSource.name}`}
+          checked={selectedLiveKeys.has(liveSource.key)}
+          disabled={isLoading('batchSortLiveSources')}
+          onChange={(event) => {
+            const checked = event.target.checked;
+            setSelectedLiveKeys((previous) => {
+              const next = new Set(previous);
+              if (checked) next.add(liveSource.key);
+              else next.delete(liveSource.key);
+              return next;
+            });
+          }}
+          className='h-4 w-4 accent-green-600'
+        />
+      </td>
+      <td className='px-3 py-4'>
+        <div className='flex items-center gap-2'>
+          <input
+            type='number'
+            step='1'
+            aria-label={`${liveSource.name} 的排序值`}
+            value={
+              sortOrderDrafts.get(liveSource.key) ??
+              getLiveSourceSortOrder(liveSource)
+            }
+            disabled={
+              orderChanged ||
+              isLoading('batchSortLiveSources') ||
+              isLoading('saveLiveSourceOrder')
+            }
+            onChange={(event) =>
+              setSortOrderDrafts((previous) =>
+                new Map(previous).set(liveSource.key, event.target.value),
+              )
+            }
+            className='w-24 rounded border border-gray-300 bg-white px-2 py-1 text-sm text-gray-900 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100'
+          />
+          <button
+            type='button'
+            disabled={
+              orderChanged ||
+              isLoading('batchSortLiveSources') ||
+              isLoading('saveLiveSourceOrder') ||
+              !sortOrderDrafts.has(liveSource.key) ||
+              Number(sortOrderDrafts.get(liveSource.key)) ===
+                getLiveSourceSortOrder(liveSource)
+            }
+            onClick={() =>
+              handleSetSortOrder(
+                [liveSource.key],
+                sortOrderDrafts.get(liveSource.key) ?? '',
+              )
+            }
+            className={`${buttonStyles.roundedPrimary} disabled:cursor-not-allowed disabled:opacity-50`}
+          >
+            保存
+          </button>
+        </div>
+      </td>
       <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100'>
         {liveSource.name}
       </td>
@@ -7246,6 +7645,86 @@ const LiveSourceConfig = ({
         </div>
       )}
 
+      <LiveSourceSearch
+        groups={searchGroups}
+        disabled={
+          isLoading('batchSortLiveSources') || isLoading('saveLiveSourceOrder')
+        }
+        onChange={(groups) => {
+          setSearchGroups(groups);
+          setSelectedLiveKeys(new Set());
+        }}
+      />
+      <div className='space-y-3 rounded-lg bg-gray-50 p-4 dark:bg-gray-900'>
+        <div className='flex flex-wrap items-center gap-3 text-sm text-gray-700 dark:text-gray-200'>
+          <span>
+            匹配 {filteredLiveSources.length} / {liveSources.length} 个，已选{' '}
+            {selectedFilteredKeys.length} 个
+          </span>
+          <button
+            type='button'
+            disabled={
+              filteredLiveSources.length === 0 ||
+              isLoading('batchSortLiveSources')
+            }
+            className={`${buttonStyles.roundedSecondary} disabled:opacity-50`}
+            onClick={() =>
+              setSelectedLiveKeys(
+                allFilteredSelected
+                  ? new Set()
+                  : new Set(filteredLiveSources.map((source) => source.key)),
+              )
+            }
+          >
+            {allFilteredSelected ? '取消全选' : '全选搜索结果'}
+          </button>
+          <button
+            type='button'
+            className={buttonStyles.roundedSecondary}
+            disabled={
+              selectedFilteredKeys.length === 0 ||
+              isLoading('batchSortLiveSources')
+            }
+            onClick={() => setSelectedLiveKeys(new Set())}
+          >
+            清空选择
+          </button>
+          <label className='flex items-center gap-2'>
+            批量排序值
+            <input
+              type='number'
+              step='1'
+              aria-label='批量排序值'
+              value={batchSortOrder}
+              disabled={isLoading('batchSortLiveSources')}
+              onChange={(event) => setBatchSortOrder(event.target.value)}
+              className='w-28 rounded border border-gray-300 bg-white px-2 py-1 dark:border-gray-600 dark:bg-gray-800'
+            />
+          </label>
+          <button
+            type='button'
+            disabled={
+              selectedFilteredKeys.length === 0 ||
+              orderChanged ||
+              isLoading('batchSortLiveSources') ||
+              isLoading('saveLiveSourceOrder')
+            }
+            onClick={() =>
+              handleSetSortOrder(selectedFilteredKeys, batchSortOrder)
+            }
+            className={`${buttonStyles.roundedPrimary} disabled:cursor-not-allowed disabled:opacity-50`}
+          >
+            {isLoading('batchSortLiveSources')
+              ? '保存中...'
+              : `设置选中 ${selectedFilteredKeys.length} 个源`}
+          </button>
+        </div>
+        <p className='text-xs text-gray-500 dark:text-gray-400'>
+          排序值越小越靠前，未设置按 1000
+          处理，相同值保持原顺序。拖拽可调整同值顺序，搜索时暂停拖拽；拖拽后请先保存排序。
+        </p>
+      </div>
+
       {/* 直播源表格 */}
       <div
         className='border border-gray-200 dark:border-gray-700 rounded-lg max-h-112 overflow-y-auto overflow-x-auto relative'
@@ -7258,10 +7737,40 @@ const LiveSourceConfig = ({
           autoScroll={false}
           modifiers={[restrictToVerticalAxis, restrictToParentElement]}
         >
-          <table className='min-w-full divide-y divide-gray-200 dark:divide-gray-700'>
+          <table className='min-w-full whitespace-nowrap divide-y divide-gray-200 dark:divide-gray-700'>
             <thead className='bg-gray-50 dark:bg-gray-900 sticky top-0 z-10'>
               <tr>
                 <th className='w-8' />
+                <th className='px-3 py-3'>
+                  <input
+                    type='checkbox'
+                    aria-label='全选搜索结果中的直播源'
+                    checked={allFilteredSelected}
+                    ref={(element) => {
+                      if (element)
+                        element.indeterminate =
+                          selectedFilteredKeys.length > 0 &&
+                          !allFilteredSelected;
+                    }}
+                    disabled={
+                      filteredLiveSources.length === 0 ||
+                      isLoading('batchSortLiveSources')
+                    }
+                    onChange={(event) =>
+                      setSelectedLiveKeys(
+                        event.target.checked
+                          ? new Set(
+                              filteredLiveSources.map((source) => source.key),
+                            )
+                          : new Set(),
+                      )
+                    }
+                    className='h-4 w-4 accent-green-600'
+                  />
+                </th>
+                <th className='px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400'>
+                  排序值
+                </th>
                 <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider'>
                   名称
                 </th>
@@ -7289,11 +7798,21 @@ const LiveSourceConfig = ({
               </tr>
             </thead>
             <SortableContext
-              items={liveSources.map((s) => s.key)}
+              items={filteredLiveSources.map((s) => s.key)}
               strategy={verticalListSortingStrategy}
             >
               <tbody className='divide-y divide-gray-200 dark:divide-gray-700'>
-                {liveSources.map(renderRow)}
+                {filteredLiveSources.map(renderRow)}
+                {filteredLiveSources.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={11}
+                      className='px-6 py-8 text-center text-sm text-gray-500'
+                    >
+                      没有符合条件的直播源
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </SortableContext>
           </table>

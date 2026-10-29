@@ -3,6 +3,7 @@
 import { db } from '@/lib/db';
 
 import { AdminConfig, SearchResultLoadMode } from './admin.types';
+import { getLiveSourceSortOrder } from './live-source-options';
 import { getDefaultPanSouConfig, normalizePanSouConfig } from './pansou';
 import { normalizePrivateLibraryConfig } from './private-library-config';
 
@@ -20,6 +21,7 @@ export interface LiveCfg {
   url: string;
   ua?: string;
   epg?: string; // 节目单
+  sortOrder?: number;
 }
 
 interface ConfigFileStruct {
@@ -237,6 +239,9 @@ export function refineConfig(adminConfig: AdminConfig): AdminConfig {
       existingLive.url = site.url;
       existingLive.ua = site.ua;
       existingLive.epg = site.epg;
+      existingLive.sortOrder = getLiveSourceSortOrder({
+        sortOrder: existingLive.sortOrder ?? site.sortOrder,
+      });
     } else {
       // 如果不存在，创建新条目
       currentLives.set(key, {
@@ -245,6 +250,7 @@ export function refineConfig(adminConfig: AdminConfig): AdminConfig {
         url: site.url,
         ua: site.ua,
         epg: site.epg,
+        sortOrder: getLiveSourceSortOrder(site),
         channelNumber: 0,
         from: 'config',
         disabled: false,
@@ -396,6 +402,7 @@ async function getInitConfig(
       url: live.url,
       ua: live.ua,
       epg: live.epg,
+      sortOrder: getLiveSourceSortOrder(live),
       channelNumber: 0,
       from: 'config',
       disabled: false,

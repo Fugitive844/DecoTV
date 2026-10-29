@@ -3,6 +3,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { getConfig } from '@/lib/config';
+import { sortLiveSources } from '@/lib/live-source-options';
 
 export const runtime = 'nodejs';
 
@@ -16,8 +17,8 @@ export async function GET(request: NextRequest) {
     }
 
     // 过滤出所有非 disabled 的直播源
-    const liveSources = (config.LiveConfig || []).filter(
-      (source) => !source.disabled,
+    const liveSources = sortLiveSources(
+      (config.LiveConfig || []).filter((source) => !source.disabled),
     );
 
     return NextResponse.json({

@@ -3,6 +3,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { getConfig } from '@/lib/config';
+import { sortLiveSources } from '@/lib/live-source-options';
 import { getEffectiveRequestOrigin } from '@/lib/request-protocol';
 import { getFallbackSpiderJarInfo, getSpiderJar } from '@/lib/spiderJar';
 import {
@@ -504,7 +505,9 @@ export async function GET(req: NextRequest) {
       : sourceSites;
 
     // 构建直播配置（同样应用成人内容过滤，仅依据显式标记）
-    let livesToUse = (cfg.LiveConfig || []).filter((l) => !l.disabled);
+    let livesToUse = sortLiveSources(
+      (cfg.LiveConfig || []).filter((l) => !l.disabled),
+    );
 
     if (shouldFilterAdult) {
       const beforeLiveCount = livesToUse.length;

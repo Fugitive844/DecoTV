@@ -27,6 +27,10 @@ import {
   saveFavorite,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
+import {
+  getLiveChannelKey,
+  mergeLiveChannels,
+} from '@/lib/live-channel-grouping';
 import { applyDecoDockTheme } from '@/lib/player/decoArtplayerTheme';
 import { parseCustomTimeFormat } from '@/lib/time';
 
@@ -207,9 +211,6 @@ function LivePageClient() {
   const [isSwitchingSource, setIsSwitchingSource] = useState(false);
 
   // 分组相关
-  const [groupedChannels, setGroupedChannels] = useState<{
-    [key: string]: LiveChannel[];
-  }>({});
   const [selectedGroup, setSelectedGroup] = useState<string>('');
 
   // Tab 切换
@@ -219,9 +220,6 @@ function LivePageClient() {
 
   // 频道列表收起状态
   const [isChannelListCollapsed, setIsChannelListCollapsed] = useState(false);
-
-  // 过滤后的频道列表
-  const [filteredChannels, setFilteredChannels] = useState<LiveChannel[]>([]);
 
   // 节目单信息
   const [epgData, setEpgData] = useState<{
@@ -270,6 +268,37 @@ function LivePageClient() {
   const normalizedSourceSearchQuery = sourceSearchQuery.trim().toLowerCase();
   const normalizedGroupSearchQuery = groupSearchQuery.trim().toLowerCase();
   const hasChannelSearch = normalizedChannelSearchQuery.length > 0;
+
+  // 原始频道保留线路 ID，兼容收藏和分享链接；列表按同组同名合并。
+  const mergedChannels = useMemo(
+    () => mergeLiveChannels(currentChannels),
+    [currentChannels],
+  );
+  const channelEntries = useMemo(
+    () =>
+      new Map(
+        mergedChannels.map((channel) => [getLiveChannelKey(channel), channel]),
+      ),
+    [mergedChannels],
+  );
+  const groupedChannels = useMemo(() => {
+    const grouped: Record<string, LiveChannel[]> = Object.create(null);
+    for (const channel of mergedChannels) {
+      (grouped[channel.group] ||= []).push(channel);
+    }
+    return grouped;
+  }, [mergedChannels]);
+  const filteredChannels = selectedGroup
+    ? groupedChannels[selectedGroup] || []
+    : mergedChannels;
+  const currentChannelLines = currentChannel
+    ? channelEntries.get(getLiveChannelKey(currentChannel))?.lines || [
+        currentChannel,
+      ]
+    : [];
+  const currentLineIndex = currentChannelLines.findIndex(
+    (line) => line.url === currentChannel?.url,
+  );
 
   const groups = useMemo(() => Object.keys(groupedChannels), [groupedChannels]);
   const groupSummaries = useMemo<GroupSummary[]>(
@@ -363,13 +392,14 @@ function LivePageClient() {
       return filteredChannels;
     }
 
-    return currentChannels.filter(
+    return mergedChannels.filter(
       (channel) =>
-        channel.name.toLowerCase().includes(normalizedChannelSearchQuery) ||
-        channel.group.toLowerCase().includes(normalizedChannelSearchQuery),
+        channel.lines.some((line) =>
+          line.name.toLowerCase().includes(normalizedChannelSearchQuery),
+        ) || channel.group.toLowerCase().includes(normalizedChannelSearchQuery),
     );
   }, [
-    currentChannels,
+    mergedChannels,
     filteredChannels,
     hasChannelSearch,
     normalizedChannelSearchQuery,
@@ -385,7 +415,7 @@ function LivePageClient() {
     );
   }, [liveSources, normalizedSourceSearchQuery]);
 
-  const totalChannelCount = currentChannels.length;
+  const totalChannelCount = mergedChannels.length;
   const currentGroupChannelCount = selectedGroup
     ? groupedChannels[selectedGroup]?.length || 0
     : 0;
@@ -849,8 +879,6 @@ function LivePageClient() {
       if (!channelsData || channelsData.length === 0) {
         // 不抛出错误，而是设置空频道列表
         setCurrentChannels([]);
-        setGroupedChannels({});
-        setFilteredChannels([]);
 
         // 更新直播源的频道数为 0
         setLiveSources((prevSources) =>
@@ -879,7 +907,9 @@ function LivePageClient() {
       // 更新直播源的频道数
       setLiveSources((prevSources) =>
         prevSources.map((s) =>
-          s.key === source.key ? { ...s, channelNumber: channels.length } : s,
+          s.key === source.key
+            ? { ...s, channelNumber: mergeLiveChannels(channels).length }
+            : s,
         ),
       );
 
@@ -903,21 +933,6 @@ function LivePageClient() {
         autoFailoverTriedUrlRef.current.add(initialChannel.url);
       }
 
-      // 按分组组织频道
-      const grouped = channels.reduce(
-        (acc, channel) => {
-          const group = channel.group || '其他';
-          if (!acc[group]) {
-            acc[group] = [];
-          }
-          acc[group].push(channel);
-          return acc;
-        },
-        {} as { [key: string]: LiveChannel[] },
-      );
-
-      setGroupedChannels(grouped);
-
       // 默认选中当前加载的channel所在的分组，如果没有则选中第一个分组
       let targetGroup = '';
       if (needLoadChannel) {
@@ -930,13 +945,15 @@ function LivePageClient() {
       }
 
       // 如果目标分组不存在，则使用第一个分组
-      if (!targetGroup || !grouped[targetGroup]) {
-        targetGroup = Object.keys(grouped)[0] || '';
+      if (
+        !targetGroup ||
+        !channels.some((channel) => channel.group === targetGroup)
+      ) {
+        targetGroup = channels[0]?.group || '';
       }
 
       // 设置默认分组和对应频道列表
       setSelectedGroup(targetGroup);
-      setFilteredChannels(targetGroup ? grouped[targetGroup] : channels);
 
       if (targetGroup) {
         setActiveTab('channels');
@@ -947,8 +964,6 @@ function LivePageClient() {
       console.error('获取频道列表失败:', err);
       // 不设置错误，而是设置空频道列表
       setCurrentChannels([]);
-      setGroupedChannels({});
-      setFilteredChannels([]);
       setChannelHealthMap({});
       channelHealthMapRef.current = {};
       healthByUrlCacheRef.current = {};
@@ -987,6 +1002,7 @@ function LivePageClient() {
       setEpgData(null);
 
       setCurrentSource(source);
+      currentSourceRef.current = source;
       await fetchChannels(source);
     } catch (err) {
       console.error('切换直播源失败:', err);
@@ -1016,6 +1032,7 @@ function LivePageClient() {
     setUnsupportedType(null);
 
     setCurrentChannel(channel);
+    currentChannelRef.current = channel;
     setVideoUrl(channel.url);
 
     if (options?.fromAutoFailover) {
@@ -1069,9 +1086,13 @@ function LivePageClient() {
     if (!channelListRef.current) return;
 
     // 使用 data 属性来查找频道元素
-    const targetElement = channelListRef.current.querySelector(
-      `[data-channel-id="${channel.id}"]`,
-    ) as HTMLButtonElement;
+    const targetElement = Array.from(
+      channelListRef.current.querySelectorAll<HTMLButtonElement>(
+        '[data-channel-id]',
+      ),
+    ).find(
+      (element) => element.dataset.channelKey === getLiveChannelKey(channel),
+    );
 
     if (targetElement) {
       // 计算滚动位置，使频道居中显示
@@ -1245,7 +1266,6 @@ function LivePageClient() {
 
     setSelectedGroup(group);
     const filtered = groupedChannels[group] || [];
-    setFilteredChannels(filtered);
     if (!options?.skipRecent) {
       pushRecentGroup(group);
     }
@@ -1253,7 +1273,10 @@ function LivePageClient() {
     // 如果当前选中的频道在新的分组中，自动滚动到该频道位置
     if (
       currentChannel &&
-      filtered.some((channel) => channel.id === currentChannel.id)
+      filtered.some(
+        (channel) =>
+          getLiveChannelKey(channel) === getLiveChannelKey(currentChannel),
+      )
     ) {
       setTimeout(() => {
         scrollToChannel(currentChannel);
@@ -1275,22 +1298,16 @@ function LivePageClient() {
 
     const current = currentChannelRef.current;
     if (!current) return false;
+    const sourceKey = currentSourceRef.current?.key;
 
     autoFailoverRunningRef.current = true;
 
     try {
-      const normalizedName = current.name.trim().toLowerCase();
-      const candidates = currentChannels.filter((candidate) => {
+      const lines = channelEntries.get(getLiveChannelKey(current))?.lines || [];
+      const candidates = lines.filter((candidate) => {
         if (candidate.id === current.id) return false;
         if (autoFailoverTriedUrlRef.current.has(candidate.url)) return false;
-
-        const sameName = candidate.name.trim().toLowerCase() === normalizedName;
-        const sameTvg =
-          current.tvgId &&
-          candidate.tvgId &&
-          current.tvgId === candidate.tvgId &&
-          current.tvgId !== current.name;
-        return sameName || sameTvg;
+        return true;
       });
 
       if (candidates.length === 0) {
@@ -1312,6 +1329,14 @@ function LivePageClient() {
         );
       }
 
+      // 探测期间用户可能已经手动换线或切换直播源。
+      if (
+        currentChannelRef.current?.id !== current.id ||
+        currentSourceRef.current?.key !== sourceKey
+      ) {
+        return false;
+      }
+
       const priorityScore: Record<ChannelHealthStatus, number> = {
         healthy: 5,
         slow: 4,
@@ -1329,7 +1354,7 @@ function LivePageClient() {
       const nextChannel = rankedCandidates[0];
       autoFailoverTriedUrlRef.current.add(nextChannel.url);
       setAutoFailoverMessage(
-        `线路异常，已自动切换到候选线路（${reason}）: ${nextChannel.name}`,
+        `线路异常，已自动切换到线路 ${lines.indexOf(nextChannel) + 1}（${reason}）`,
       );
       await handleChannelChange(nextChannel, { fromAutoFailover: true });
       return true;
@@ -1635,6 +1660,7 @@ function LivePageClient() {
       console.error('HLS Error:', event, data);
 
       if (data.fatal) {
+        void attemptAutoFailover('HLS错误');
         switch (data.type) {
           case Hls.ErrorTypes.NETWORK_ERROR:
             hls.startLoad();
@@ -1900,6 +1926,31 @@ function LivePageClient() {
           },
           type: type,
           customType: customType,
+          controls:
+            currentChannelLines.length > 1
+              ? [
+                  {
+                    name: 'live-line',
+                    position: 'right',
+                    index: 5,
+                    html: `线路 ${currentLineIndex + 1}`,
+                    tooltip: '切换播放线路',
+                    selector: currentChannelLines.map((line, index) => ({
+                      html: `线路 ${index + 1}`,
+                      default: line.url === currentChannel.url,
+                      lineId: line.id,
+                    })),
+                    onSelect: (item) => {
+                      const line = currentChannelLines.find(
+                        (candidate) => candidate.id === item.lineId,
+                      );
+                      if (line && line.url !== currentChannelRef.current?.url) {
+                        void handleChannelChange(line);
+                      }
+                    },
+                  },
+                ]
+              : [],
           icons: {
             loading:
               '<img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI1MCIgaGVpZ2h0PSI1MCIgdmlld0JveD0iMCAwIDUwIDUwIj48cGF0aCBkPSJNMjUuMjUxIDYuNDYxYy0xMC4zMTggMC0xOC42ODMgOC4zNjUtMTguNjgzIDE4LjY4M2g0LjA2OGMwLTguMDcgNi41NDUtMTQuNjE1IDE0LjYxNS0xNC42MTVWNi40NjF6IiBmaWxsPSIjMDA5Njg4Ij48YW5pbWF0ZVRyYW5zZm9ybSBhdHRyaWJ1dGVOYW1lPSJ0cmFuc2Zvcm0iIGF0dHJpYnV0ZVR5cGU9IlhNTCIgZHVyPSIxcyIgZnJvbT0iMCAyNSAyNSIgcmVwZWF0Q291bnQ9ImluZGVmaW5pdGUiIHRvPSIzNjAgMjUgMjUiIHR5cGU9InJvdGF0ZSIvPjwvcGF0aD48L3N2Zz4=">',
@@ -1923,33 +1974,37 @@ function LivePageClient() {
         // 监听播放器事件
         artPlayerRef.current.on('ready', () => {
           setError(null);
-          setIsVideoLoading(false);
-          stopPlaybackWatchdog();
+          if (hasRenderableVideoFrame(artPlayerRef.current?.video || null)) {
+            setIsVideoLoading(false);
+            stopPlaybackWatchdog();
+          } else {
+            startPlaybackWatchdog();
+          }
         });
 
-        artPlayerRef.current.on('loadstart', () => {
+        artPlayerRef.current.on('video:loadstart', () => {
           setIsVideoLoading(true);
           startPlaybackWatchdog();
         });
 
-        artPlayerRef.current.on('loadeddata', () => {
+        artPlayerRef.current.on('video:loadeddata', () => {
           setIsVideoLoading(false);
           stopPlaybackWatchdog();
         });
 
-        artPlayerRef.current.on('canplay', () => {
+        artPlayerRef.current.on('video:canplay', () => {
           setIsVideoLoading(false);
           stopPlaybackWatchdog();
         });
 
-        artPlayerRef.current.on('waiting', () => {
+        artPlayerRef.current.on('video:waiting', () => {
           setIsVideoLoading(true);
           if (!playbackWatchdogRef.current) {
             startPlaybackWatchdog();
           }
         });
 
-        artPlayerRef.current.on('error', (err: any) => {
+        artPlayerRef.current.on('video:error', (err: any) => {
           console.error('播放器错误:', err);
           stopPlaybackWatchdog();
           void attemptAutoFailover('播放器报错');
@@ -1958,6 +2013,7 @@ function LivePageClient() {
         const playerVideo = artPlayerRef.current
           ?.video as HTMLVideoElement | null;
         setupVideoFrameMonitor(playerVideo, type);
+        if (!hasRenderableVideoFrame(playerVideo)) startPlaybackWatchdog();
 
         if (playerVideo && type !== 'flv') {
           ensureVideoSource(playerVideo, targetUrl);
@@ -2435,6 +2491,46 @@ function LivePageClient() {
                   className='bg-black w-full h-full rounded-xl overflow-hidden shadow-lg border border-white/0 dark:border-white/30'
                 ></div>
 
+                {currentChannelLines.length > 1 && (
+                  <label className='absolute right-3 top-3 z-700 flex items-center gap-2 rounded-lg bg-black/75 px-3 py-2 text-xs text-white shadow-lg'>
+                    <span>播放线路</span>
+                    <select
+                      aria-label='切换播放线路'
+                      value={currentChannelLines[currentLineIndex]?.id || ''}
+                      disabled={isSwitchingSource}
+                      onChange={(event) => {
+                        const line = currentChannelLines.find(
+                          (candidate) => candidate.id === event.target.value,
+                        );
+                        if (line && line.url !== currentChannel?.url) {
+                          void handleChannelChange(line);
+                        }
+                      }}
+                      className='max-w-44 rounded border border-white/30 bg-gray-900 px-2 py-1 text-white focus:outline-none focus:ring-2 focus:ring-green-500 disabled:opacity-50'
+                    >
+                      {currentChannelLines.map((line, index) => {
+                        const status = channelHealthMap[line.id]?.status;
+                        const statusLabel =
+                          status === 'healthy'
+                            ? '可用'
+                            : status === 'slow'
+                              ? '较慢'
+                              : status === 'unreachable'
+                                ? '异常'
+                                : status === 'checking'
+                                  ? '检测中'
+                                  : '未检测';
+                        return (
+                          <option key={line.id} value={line.id}>
+                            线路 {index + 1} / {currentChannelLines.length} ·{' '}
+                            {statusLabel}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </label>
+                )}
+
                 {/* 不支持的直播类型提示 */}
                 {unsupportedType && (
                   <div className='absolute inset-0 bg-black/92 rounded-xl overflow-hidden shadow-lg border border-white/0 dark:border-white/30 flex items-center justify-center z-600 transition-all duration-300'>
@@ -2601,11 +2697,20 @@ function LivePageClient() {
                     >
                       {displayChannels.length > 0 ? (
                         displayChannels.map((channel) => {
-                          const isActive = channel.id === currentChannel?.id;
+                          const channelKey = getLiveChannelKey(channel);
+                          const entry = channelEntries.get(channelKey);
+                          const isActive =
+                            !!currentChannel &&
+                            channelKey === getLiveChannelKey(currentChannel);
+                          const activeLine =
+                            isActive && currentChannel
+                              ? currentChannel
+                              : channel;
                           const isSearchResult = hasChannelSearch;
-                          const healthInfo = channelHealthMap[channel.id];
+                          const healthInfo = channelHealthMap[activeLine.id];
                           const streamType =
-                            healthInfo?.type || detectTypeFromUrl(channel.url);
+                            healthInfo?.type ||
+                            detectTypeFromUrl(activeLine.url);
                           const healthStatus = healthInfo?.status || 'unknown';
                           const healthLabel =
                             healthStatus === 'healthy'
@@ -2626,8 +2731,10 @@ function LivePageClient() {
                             <button
                               key={channel.id}
                               data-channel-id={channel.id}
+                              data-channel-key={channelKey}
                               onClick={() => {
-                                handleChannelChange(channel);
+                                if (!isActive)
+                                  void handleChannelChange(channel);
                                 if (
                                   isSearchResult &&
                                   channel.group !== selectedGroup
@@ -2679,6 +2786,11 @@ function LivePageClient() {
                                     )}
                                   </div>
                                   <div className='mt-1 flex items-center gap-1.5 flex-wrap'>
+                                    {entry && entry.lines.length > 1 && (
+                                      <span className='shrink-0 rounded-full border border-green-200 bg-green-100 px-1.5 py-0.5 text-[10px] text-green-700 dark:border-green-800 dark:bg-green-900/30 dark:text-green-300'>
+                                        {entry.lines.length} 条线路
+                                      </span>
+                                    )}
                                     {!isSearchResult && (
                                       <span
                                         className='text-xs text-gray-500 dark:text-gray-400'

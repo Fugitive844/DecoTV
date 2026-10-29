@@ -105,6 +105,7 @@ export interface AdminConfig {
     url: string;
     ua?: string;
     epg?: string;
+    sortOrder?: number;
     from: 'config' | 'custom';
     channelNumber?: number;
     disabled?: boolean;
