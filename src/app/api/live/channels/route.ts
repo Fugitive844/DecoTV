@@ -1,9 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { getCachedLiveChannels } from '@/lib/live';
+import {
+  getLiveChannelsForClient,
+  LiveChannelsUnavailableError,
+} from '@/lib/live';
 import { buildLiveChannelDisplayList } from '@/lib/live-channel-display.mjs';
+import { applyChannelTranslations } from '@/lib/translation/display';
 
 export const runtime = 'nodejs';
+
+const NO_STORE = { 'Cache-Control': 'no-store' };
 
 export async function GET(request: NextRequest) {
   try {
@@ -14,20 +20,24 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: '缺少直播源参数' }, { status: 400 });
     }
 
-    const channelData = await getCachedLiveChannels(sourceKey);
+    const channelData = await getLiveChannelsForClient(sourceKey);
 
     if (!channelData) {
       return NextResponse.json({ error: '频道信息未找到' }, { status: 404 });
     }
 
-    return NextResponse.json(
-      {
-        success: true,
-        data: buildLiveChannelDisplayList(sourceKey, channelData),
-      },
-      { headers: { 'Cache-Control': 'no-store' } },
+    // 译文只在响应时拼装，不写回频道缓存。
+    const data = await applyChannelTranslations(
+      sourceKey,
+      buildLiveChannelDisplayList(sourceKey, channelData),
     );
-  } catch {
+    return NextResponse.json({ success: true, data }, { headers: NO_STORE });
+  } catch (error) {
+    if (error instanceof LiveChannelsUnavailableError)
+      return NextResponse.json(
+        { error: error.message },
+        { status: 503, headers: NO_STORE },
+      );
     return NextResponse.json({ error: '获取频道信息失败' }, { status: 500 });
   }
 }

@@ -11,6 +11,14 @@ import {
   createLiveChannelCache,
   normalizeLiveRefreshConcurrency,
 } from '@/lib/live-cache-manager.mjs';
+import {
+  isLiveCoolingDown,
+  type LiveScheduleState,
+  markLiveAttempt,
+  markLiveFailure,
+  markLiveSuccess,
+  normalizeLiveSchedule,
+} from '@/lib/live-schedule.mjs';
 
 const defaultUA = 'AptvPlayer/1.4.10';
 
@@ -24,6 +32,71 @@ export function getLiveSourceFingerprint(source: LiveCacheSource): string {
     )
     .digest('hex');
 }
+
+// 前台请求在无成功缓存时最多等待的时间（含排队），超时后后台继续抓取。
+const LIVE_CLIENT_WAIT_MS = 5_000;
+
+export class LiveChannelsUnavailableError extends Error {
+  constructor(message = '频道暂不可用，后台正在重试') {
+    super(message);
+    this.name = 'LiveChannelsUnavailableError';
+  }
+}
+
+const scheduleKey = (key: string) => `live:sched:${encodeURIComponent(key)}`;
+
+export async function getLiveSchedule(
+  source: LiveCacheSource,
+): Promise<LiveScheduleState> {
+  const fingerprint = getLiveSourceFingerprint(source);
+  try {
+    const raw = await db.kvGet(scheduleKey(source.key));
+    return normalizeLiveSchedule(raw ? JSON.parse(raw) : null, fingerprint);
+  } catch {
+    return normalizeLiveSchedule(null, fingerprint);
+  }
+}
+
+export async function getLiveSchedules(
+  sources: LiveCacheSource[],
+): Promise<Map<string, LiveScheduleState>> {
+  const result = new Map<string, LiveScheduleState>();
+  if (sources.length === 0) return result;
+  let raws: (string | null)[] = [];
+  try {
+    raws = await db.kvMGet(sources.map((source) => scheduleKey(source.key)));
+  } catch {
+    raws = [];
+  }
+  sources.forEach((source, index) => {
+    let parsed: unknown = null;
+    try {
+      parsed = raws[index] ? JSON.parse(raws[index] as string) : null;
+    } catch {
+      parsed = null;
+    }
+    result.set(
+      source.key,
+      normalizeLiveSchedule(parsed, getLiveSourceFingerprint(source)),
+    );
+  });
+  return result;
+}
+
+async function updateLiveSchedule(
+  source: LiveCacheSource,
+  update: (state: LiveScheduleState) => LiveScheduleState,
+): Promise<void> {
+  const state = update(await getLiveSchedule(source));
+  await db.kvSet(scheduleKey(source.key), JSON.stringify(state));
+}
+
+export async function deleteLiveSchedule(key: string): Promise<void> {
+  await db.kvDel([scheduleKey(key)]);
+}
+
+const errorText = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
 
 const globalLiveCache = globalThis as typeof globalThis & {
   __decotvLiveChannelCache?: ReturnType<typeof createLiveChannelCache>;
@@ -41,6 +114,26 @@ const channelCache = (globalLiveCache.__decotvLiveChannelCache ??=
     concurrency: normalizeLiveRefreshConcurrency(
       process.env.LIVE_SOURCE_REFRESH_CONCURRENCY,
     ),
+    hooks: {
+      onStart: (source) =>
+        updateLiveSchedule(source, (state) =>
+          markLiveAttempt(state, Date.now()),
+        ),
+      onSuccess: async (source, record, epgError) => {
+        await updateLiveSchedule(source, (state) =>
+          markLiveSuccess(state, Date.now(), epgError),
+        );
+        // 抓取成功后异步收集待翻译原文，不阻塞缓存提交。
+        void import('@/lib/translation/store')
+          .then(({ collectChannelTexts }) => collectChannelTexts(record))
+          // eslint-disable-next-line no-console
+          .catch((error) => console.error('收集翻译原文失败:', error));
+      },
+      onFailure: (source, error) =>
+        updateLiveSchedule(source, (state) =>
+          markLiveFailure(state, Date.now(), errorText(error)),
+        ),
+    },
   }));
 
 export function getLiveRefreshConcurrency(): number {
@@ -49,30 +142,95 @@ export function getLiveRefreshConcurrency(): number {
 
 export async function deleteCachedLiveChannels(key: string): Promise<void> {
   await channelCache.delete(key);
+  await deleteLiveSchedule(key).catch(() => undefined);
 }
 
-export async function getCachedLiveChannels(
-  key: string,
-): Promise<LiveChannels | null> {
+async function findEnabledLiveSource(key: string) {
   const config = await getConfig();
   const liveInfo = config.LiveConfig?.find(
     (live) => live.key === key && !live.disabled,
   );
-  if (!liveInfo) return null;
-  return channelCache.get({ ...liveInfo });
+  return liveInfo ? { ...liveInfo } : null;
 }
 
+// 只读成功缓存，不触发抓取（节目单、管理页使用）。
+export async function getCachedLiveChannels(
+  key: string,
+): Promise<LiveChannels | null> {
+  const liveInfo = await findEnabledLiveSource(key);
+  if (!liveInfo) return null;
+  return channelCache.peek(liveInfo);
+}
+
+export async function peekLiveChannels(
+  source: LiveCacheSource,
+): Promise<LiveChannels | null> {
+  return channelCache.peek({ ...source });
+}
+
+/**
+ * 前台频道请求：有成功缓存立即返回（无论多旧）；无缓存时冷却期内立即暂不可用，
+ * 否则以优先级加入或复用抓取任务，最多等待 5 秒（含排队），超时后台继续。
+ * 返回 null 表示源不存在或已禁用。
+ */
+export async function getLiveChannelsForClient(
+  key: string,
+): Promise<LiveChannels | null> {
+  const liveInfo = await findEnabledLiveSource(key);
+  if (!liveInfo) return null;
+  const cached = await channelCache.peek(liveInfo);
+  if (cached) return cached;
+  if (
+    !channelCache.isRefreshing(liveInfo) &&
+    isLiveCoolingDown(await getLiveSchedule(liveInfo), Date.now())
+  )
+    throw new LiveChannelsUnavailableError();
+  const task = channelCache.refresh(liveInfo, { priority: true });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      task,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new LiveChannelsUnavailableError()),
+          LIVE_CLIENT_WAIT_MS,
+        );
+      }),
+    ]);
+  } catch {
+    // 等待超时或抓取失败：后台任务继续，前端收到暂不可用。
+    task.catch(() => undefined);
+    throw new LiveChannelsUnavailableError();
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * 普通刷新遵守失败冷却；force 为显式强制刷新（仍受并发限制并复用进行中任务）。
+ */
 export async function refreshLiveChannels(
   liveInfo: LiveCacheSource,
+  options: { force?: boolean } = { force: true },
 ): Promise<number> {
+  if (
+    !options.force &&
+    !channelCache.isRefreshing(liveInfo) &&
+    isLiveCoolingDown(await getLiveSchedule(liveInfo), Date.now())
+  )
+    throw new Error('直播源处于失败冷却期');
   const cache = await channelCache.refresh({ ...liveInfo });
   return cache.channelNumber;
+}
+
+export function isLiveSourceRefreshing(source: LiveCacheSource): boolean {
+  return channelCache.isRefreshing({ ...source });
 }
 
 async function fetchLiveChannelData(
   liveInfo: LiveCacheSource,
   previous: LiveChannelCacheRecord | null,
-): Promise<LiveChannelData> {
+): Promise<LiveChannelData & { epgError?: string }> {
   const ua = liveInfo.ua || defaultUA;
   const response = await fetch(liveInfo.url, {
     headers: {
@@ -98,6 +256,7 @@ async function fetchLiveChannelData(
     channels: result.channels,
     epgUrl: epgUrl,
     epgs: epgs ?? previous?.epgs ?? {},
+    epgError: epgUrl && !epgs ? 'EPG 获取失败，保留上次节目单' : '',
   };
 }
 

@@ -23,7 +23,13 @@
     "prepare": "husky install",
     "vercel-build": "pnpm gen:manifest && pnpm gen:version && next build",
     "docker:build": "docker build -t decotv .",
-    "docker:run": "docker run -p 3000:3000 decotv"
+    "docker:run": "docker run -p 3000:3000 decotv",
+    "test:live-schedule": "node --test scripts/test-live-schedule.mjs",
+    "test:source-merge": "node --test scripts/test-source-merge.mjs",
+    "test:translation": "node --test scripts/test-translation.mjs scripts/test-shared-file.mjs",
+    "test:backend": "node --test scripts/test-live-cache.mjs scripts/test-live-schedule.mjs scripts/test-source-merge.mjs scripts/test-translation.mjs scripts/test-shared-file.mjs",
+    "mock:llm": "node scripts/mock-llm-server.mjs",
+    "test:kvrocks": "node --test scripts/test-storage-kvrocks.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

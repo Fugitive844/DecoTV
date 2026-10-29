@@ -282,6 +282,7 @@ function shouldSkipAuth(pathname: string): boolean {
       '/api/admin/user',
       '/api/admin/config_file',
       '/api/admin/reset',
+      '/api/admin/manage',
       '/admin', // 允许直接访问 admin 页面
     ];
 

@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { persistAdminConfigMutation } from '@/lib/admin-config-mutation';
 import { getAuthSecret, verifyApiAuth } from '@/lib/auth';
 import { getConfig } from '@/lib/config';
+import { applyManualEdit, restoreUpstream } from '@/lib/source-merge.mjs';
 
 export const runtime = 'nodejs';
 
@@ -19,7 +20,9 @@ type Action =
   | 'batch_enable'
   | 'batch_delete'
   | 'update_adult'
-  | 'update_ad_filter';
+  | 'update_ad_filter'
+  | 'edit'
+  | 'restore_upstream';
 
 interface BaseBody {
   action?: Action;
@@ -71,6 +74,8 @@ export async function POST(request: NextRequest) {
       'batch_delete',
       'update_adult',
       'update_ad_filter',
+      'edit',
+      'restore_upstream',
     ];
     if (!action || !ACTIONS.includes(action)) {
       return NextResponse.json({ error: '参数格式错误' }, { status: 400 });
@@ -142,7 +147,61 @@ export async function POST(request: NextRequest) {
         const entry = adminConfig.SourceConfig.find((s) => s.key === key);
         if (!entry)
           return NextResponse.json({ error: '源不存在' }, { status: 404 });
-        entry.is_adult = is_adult || false;
+        // 成人标记属于来源字段：人工修改记录覆盖，订阅智能合并时保留。
+        const index = adminConfig.SourceConfig.indexOf(entry);
+        adminConfig.SourceConfig[index] = applyManualEdit('video', entry, {
+          is_adult: is_adult || false,
+        }) as typeof entry;
+        break;
+      }
+      case 'edit': {
+        const { key, name, api, detail, is_adult, disable_ad_filter } =
+          body as {
+            key?: string;
+            name?: string;
+            api?: string;
+            detail?: string;
+            is_adult?: boolean;
+            disable_ad_filter?: boolean;
+          };
+        if (!key)
+          return NextResponse.json({ error: '缺少 key 参数' }, { status: 400 });
+        const index = adminConfig.SourceConfig.findIndex((s) => s.key === key);
+        if (index < 0)
+          return NextResponse.json({ error: '源不存在' }, { status: 404 });
+        if (name !== undefined && !String(name).trim())
+          return NextResponse.json({ error: '名称不能为空' }, { status: 400 });
+        if (api !== undefined && !String(api).trim())
+          return NextResponse.json(
+            { error: '接口地址不能为空' },
+            { status: 400 },
+          );
+        // key 是身份标识，编辑不修改 key。
+        adminConfig.SourceConfig[index] = applyManualEdit(
+          'video',
+          adminConfig.SourceConfig[index],
+          {
+            name: name === undefined ? undefined : String(name).trim(),
+            api: api === undefined ? undefined : String(api).trim(),
+            detail: detail === undefined ? undefined : String(detail).trim(),
+            is_adult: is_adult === undefined ? undefined : !!is_adult,
+            disable_ad_filter:
+              disable_ad_filter === undefined ? undefined : !!disable_ad_filter,
+          },
+        ) as (typeof adminConfig.SourceConfig)[number];
+        break;
+      }
+      case 'restore_upstream': {
+        const { key, fields } = body as { key?: string; fields?: string[] };
+        if (!key)
+          return NextResponse.json({ error: '缺少 key 参数' }, { status: 400 });
+        const index = adminConfig.SourceConfig.findIndex((s) => s.key === key);
+        if (index < 0)
+          return NextResponse.json({ error: '源不存在' }, { status: 404 });
+        adminConfig.SourceConfig[index] = restoreUpstream(
+          adminConfig.SourceConfig[index],
+          Array.isArray(fields) ? fields : undefined,
+        ) as (typeof adminConfig.SourceConfig)[number];
         break;
       }
       case 'update_ad_filter': {

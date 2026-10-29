@@ -13,10 +13,12 @@ import {
   searchAuditKey,
   sortPlayAudits,
 } from './audit';
+import { COMPARE_AND_SET_SCRIPT } from './kv-scripts.mjs';
 import type { LiveChannelCacheRecord } from './live-cache.types';
 import {
   Favorite,
   IStorage,
+  KvSetOptions,
   PlayAuditEntry,
   PlayRecord,
   SearchAuditEntry,
@@ -320,6 +322,92 @@ export class UpstashRedisStorage implements IStorage {
     await withRetry(() =>
       this.client.del(`live:channels:${encodeURIComponent(key)}`),
     );
+  }
+
+  // ---------- 通用键值原语 ----------
+  // Upstash 会自动把 JSON 字符串反序列化，这里统一还原成字符串。
+  private toKvString(value: unknown): string | null {
+    if (value === null || value === undefined) return null;
+    return typeof value === 'string' ? value : JSON.stringify(value);
+  }
+
+  async kvGet(key: string): Promise<string | null> {
+    return this.toKvString(await withRetry(() => this.client.get(key)));
+  }
+
+  async kvMGet(keys: string[]): Promise<(string | null)[]> {
+    if (keys.length === 0) return [];
+    const values = await withRetry(() => this.client.mget(...keys));
+    return (values as unknown[]).map((value) => this.toKvString(value));
+  }
+
+  async kvSet(
+    key: string,
+    value: string,
+    options: KvSetOptions = {},
+  ): Promise<boolean> {
+    const setOptions: any = {};
+    if (options.nx) setOptions.nx = true;
+    if (options.px) setOptions.px = Math.max(1, Math.floor(options.px));
+    const result = await withRetry(() =>
+      this.client.set(key, value, setOptions),
+    );
+    return result === 'OK';
+  }
+
+  async kvDel(keys: string[]): Promise<void> {
+    if (keys.length === 0) return;
+    await withRetry(() => this.client.del(...keys));
+  }
+
+  async kvCompareAndSet(
+    key: string,
+    expected: string | null,
+    value: string | null,
+    px?: number,
+  ): Promise<boolean> {
+    const result = await this.client.eval(
+      COMPARE_AND_SET_SCRIPT,
+      [key],
+      [
+        expected === null ? '1' : '0',
+        expected ?? '',
+        value === null ? '1' : '0',
+        value ?? '',
+        px ? String(Math.max(1, Math.floor(px))) : '',
+      ],
+    );
+    return Number(result) === 1;
+  }
+
+  async zAdd(key: string, score: number, member: string): Promise<void> {
+    await withRetry(() => this.client.zadd(key, { score, member }));
+  }
+
+  async zRem(key: string, members: string[]): Promise<void> {
+    if (members.length === 0) return;
+    await withRetry(() => this.client.zrem(key, ...members));
+  }
+
+  async zRangeByScore(
+    key: string,
+    min: number,
+    max: number,
+    limit: number,
+  ): Promise<string[]> {
+    const values = await withRetry(() =>
+      this.client.zrange(key, min, max, {
+        byScore: true,
+        offset: 0,
+        count: limit,
+      }),
+    );
+    return (values as unknown[]).map(String);
+  }
+
+  async zRangeAll(key: string): Promise<string[]> {
+    const values = await withRetry(() => this.client.zrange(key, 0, -1));
+    return (values as unknown[]).map(String);
   }
 
   // ---------- 跳过片头片尾配置 ----------

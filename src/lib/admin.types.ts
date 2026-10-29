@@ -91,6 +91,14 @@ export interface AdminConfig {
     disabled?: boolean;
     is_adult?: boolean;
     disable_ad_filter?: boolean;
+    // 导入／订阅提供的来源值与被人工修改过的来源字段（见 source-merge.mjs）
+    upstream?: Partial<{
+      name: string;
+      api: string;
+      detail: string;
+      is_adult: boolean;
+    }>;
+    overriddenFields?: string[];
   }[];
   CustomCategories: {
     name?: string;
@@ -109,6 +117,8 @@ export interface AdminConfig {
     from: 'config' | 'custom';
     channelNumber?: number;
     disabled?: boolean;
+    upstream?: Partial<{ name: string; url: string; ua: string; epg: string }>;
+    overriddenFields?: string[];
   }[];
   DanmuConfig?: {
     enabled: boolean;

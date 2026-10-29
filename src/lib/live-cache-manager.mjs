@@ -49,10 +49,15 @@ function isChannelData(value) {
  *     set: (key: string, value: LiveChannelCacheRecord) => Promise<void>,
  *     delete: (key: string) => Promise<void>
  *   },
- *   fetchSource: (source: LiveCacheSource, previous: LiveChannelCacheRecord | null) => Promise<LiveChannelData>,
+ *   fetchSource: (source: LiveCacheSource, previous: LiveChannelCacheRecord | null) => Promise<LiveChannelData & { epgError?: string }>,
  *   fingerprint: (source: LiveCacheSource) => string,
  *   concurrency?: number,
- *   now?: () => number
+ *   now?: () => number,
+ *   hooks?: {
+ *     onStart?: (source: LiveCacheSource) => unknown,
+ *     onSuccess?: (source: LiveCacheSource, record: LiveChannelCacheRecord, epgError: string) => unknown,
+ *     onFailure?: (source: LiveCacheSource, error: unknown) => unknown
+ *   }
  * }} options
  */
 export function createLiveChannelCache(options) {
@@ -70,28 +75,77 @@ export function createLiveChannelCache(options) {
   const reads = new Map();
   /** @type {Map<string, Promise<void>>} */
   const writes = new Map();
-  /** @type {Array<() => void>} */
-  const queue = [];
-  let active = 0;
-
-  const drain = () => {
-    while (active < concurrency && queue.length > 0) queue.shift()?.();
+  /** @typedef {{ start: () => void, priority: boolean }} QueueEntry */
+  /** @type {QueueEntry[]} */
+  const priorityQueue = [];
+  /** @type {QueueEntry[]} */
+  const normalQueue = [];
+  /** @type {Map<string, QueueEntry>} */
+  const queued = new Map();
+  const hooks = options.hooks || {};
+  // 钩子只用于调度状态和翻译收集，失败不影响抓取结果。
+  /** @param {((...args: any[]) => unknown) | undefined} hook @param {...unknown} args */
+  const callHook = async (hook, ...args) => {
+    try {
+      await hook?.(...args);
+    } catch {
+      /* 忽略 */
+    }
   };
-  /** @template T @param {() => Promise<T>} task @returns {Promise<T>} */
-  const run = (task) =>
+  let active = 0;
+  let priorityStreak = 0;
+
+  // 前台无缓存任务优先；连续启动 3 个优先任务后若普通队列非空，至少放行 1 个普通任务。
+  const drain = () => {
+    while (active < concurrency) {
+      let entry;
+      if (
+        priorityQueue.length > 0 &&
+        (priorityStreak < 3 || normalQueue.length === 0)
+      ) {
+        entry = priorityQueue.shift();
+        priorityStreak++;
+      } else if (normalQueue.length > 0) {
+        entry = normalQueue.shift();
+        priorityStreak = 0;
+      } else break;
+      entry?.start();
+    }
+  };
+  /** @template T @param {() => Promise<T>} task @param {boolean} priority @param {string} [queueKey] @returns {Promise<T>} */
+  const run = (task, priority, queueKey) =>
     new Promise((resolve, reject) => {
-      queue.push(() => {
-        active++;
-        Promise.resolve()
-          .then(task)
-          .then(resolve, reject)
-          .finally(() => {
-            active--;
-            drain();
-          });
-      });
+      /** @type {QueueEntry} */
+      const entry = {
+        priority,
+        start: () => {
+          if (queueKey && queued.get(queueKey) === entry)
+            queued.delete(queueKey);
+          active++;
+          Promise.resolve()
+            .then(task)
+            .then(resolve, reject)
+            .finally(() => {
+              active--;
+              drain();
+            });
+        },
+      };
+      if (queueKey) queued.set(queueKey, entry);
+      (priority ? priorityQueue : normalQueue).push(entry);
       drain();
     });
+  /** @param {string} queueKey */
+  const promote = (queueKey) => {
+    const entry = queued.get(queueKey);
+    if (!entry || entry.priority) return;
+    const index = normalQueue.indexOf(entry);
+    if (index < 0) return;
+    normalQueue.splice(index, 1);
+    entry.priority = true;
+    priorityQueue.push(entry);
+    drain();
+  };
 
   /** @param {string} key @param {() => Promise<void>} task */
   const mutate = (key, task) => {
@@ -156,36 +210,58 @@ export function createLiveChannelCache(options) {
     return operation;
   };
 
-  /** @param {LiveCacheSource} source @returns {Promise<LiveChannelCacheRecord>} */
-  const refresh = (source) => {
+  /**
+   * @param {LiveCacheSource} source
+   * @param {{ priority?: boolean }} [refreshOptions]
+   * @returns {Promise<LiveChannelCacheRecord>}
+   */
+  const refresh = (source, refreshOptions = {}) => {
     const { signature, generation } = track(source);
     const requestKey = JSON.stringify([source.key, signature, generation]);
     const existing = pending.get(requestKey);
-    if (existing) return existing;
-    const operation = run(async () => {
-      if (!isCurrent(source.key, signature, generation))
-        throw new Error('直播源已变更');
-      const previous = await read(source, signature, generation);
-      const data = await options.fetchSource(source, previous);
-      if (!isChannelData(data))
-        throw new Error('直播源没有有效频道，保留旧缓存');
-      /** @type {LiveChannelCacheRecord} */
-      const record = {
-        ...data,
-        version: 1,
-        sourceFingerprint: signature,
-        fetchedAt: now(),
-      };
-      await mutate(source.key, async () => {
+    if (existing) {
+      if (refreshOptions.priority) promote(requestKey);
+      return existing;
+    }
+    const operation = run(
+      async () => {
         if (!isCurrent(source.key, signature, generation))
           throw new Error('直播源已变更');
-        await options.storage.set(source.key, record);
-        if (!isCurrent(source.key, signature, generation))
-          throw new Error('直播源已变更');
-        memory.set(source.key, record);
-      });
-      return record;
-    });
+        await callHook(hooks.onStart, source);
+        try {
+          const previous = await read(source, signature, generation);
+          const { epgError, ...data } = await options.fetchSource(
+            source,
+            previous,
+          );
+          if (!isChannelData(data))
+            throw new Error('直播源没有有效频道，保留旧缓存');
+          /** @type {LiveChannelCacheRecord} */
+          const record = {
+            ...data,
+            version: 1,
+            sourceFingerprint: signature,
+            fetchedAt: now(),
+          };
+          await mutate(source.key, async () => {
+            if (!isCurrent(source.key, signature, generation))
+              throw new Error('直播源已变更');
+            await options.storage.set(source.key, record);
+            if (!isCurrent(source.key, signature, generation))
+              throw new Error('直播源已变更');
+            memory.set(source.key, record);
+          });
+          await callHook(hooks.onSuccess, source, record, epgError || '');
+          return record;
+        } catch (error) {
+          if (isCurrent(source.key, signature, generation))
+            await callHook(hooks.onFailure, source, error);
+          throw error;
+        }
+      },
+      !!refreshOptions.priority,
+      requestKey,
+    );
     pending.set(requestKey, operation);
     const cleanup = () => {
       if (pending.get(requestKey) === operation) pending.delete(requestKey);
@@ -202,6 +278,16 @@ export function createLiveChannelCache(options) {
       const { signature, generation } = track(source);
       const stored = await read(source, signature, generation);
       return stored || refresh(source);
+    },
+    /** 只读当前配置对应的成功缓存，不触发抓取。 @param {LiveCacheSource} source */
+    async peek(source) {
+      const { signature, generation } = track(source);
+      return read(source, signature, generation);
+    },
+    /** @param {LiveCacheSource} source */
+    isRefreshing(source) {
+      const { signature, generation } = track(source);
+      return pending.has(JSON.stringify([source.key, signature, generation]));
     },
     /** @param {string} key */
     async delete(key) {

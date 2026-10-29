@@ -17,8 +17,12 @@ export async function GET(request: NextRequest) {
     }
 
     // 过滤出所有非 disabled 的直播源
+    // 导入覆盖信息只用于管理端，保持 APK 使用的字段不变。
     const liveSources = sortLiveSources(
       (config.LiveConfig || []).filter((source) => !source.disabled),
+    ).map(
+      ({ upstream: _upstream, overriddenFields: _overridden, ...source }) =>
+        source,
     );
 
     return NextResponse.json({

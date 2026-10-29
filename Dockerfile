@@ -78,9 +78,9 @@ COPY --from=builder --chown=nextjs:nodejs /app/start.js ./start.js
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
-# 预创建服务端转存目录，确保非 root 用户可写。
-RUN mkdir -p /app/.cache/ffmpeg-downloads \
-  && chown -R nextjs:nodejs /app/.cache
+# 预创建服务端转存目录与两站共享译文目录，确保非 root 用户可写。
+RUN mkdir -p /app/.cache/ffmpeg-downloads /app/shared-translations \
+  && chown -R nextjs:nodejs /app/.cache /app/shared-translations
 
 # 切换到非特权用户
 USER nextjs

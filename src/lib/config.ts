@@ -6,6 +6,7 @@ import { AdminConfig, SearchResultLoadMode } from './admin.types';
 import { getLiveSourceSortOrder } from './live-source-options';
 import { getDefaultPanSouConfig, normalizePanSouConfig } from './pansou';
 import { normalizePrivateLibraryConfig } from './private-library-config';
+import { mergeSourceRecord } from './source-merge.mjs';
 
 export interface ApiSite {
   key: string;
@@ -156,27 +157,26 @@ export function refineConfig(adminConfig: AdminConfig): AdminConfig {
     (adminConfig.SourceConfig || []).map((s) => [s.key, s]),
   );
 
+  // 订阅／配置文件统一走智能合并：更新来源值，保留人工覆盖字段与本地启用状态。
   apiSitesFromFile.forEach(([key, site]) => {
-    const existingSource = currentApiSites.get(key);
-    if (existingSource) {
-      // 如果已存在,只覆盖 name、api、detail、is_adult 和 from
-      existingSource.name = site.name;
-      existingSource.api = site.api;
-      existingSource.detail = site.detail;
-      existingSource.is_adult = site.is_adult || false;
-      existingSource.from = 'config';
-    } else {
-      // 如果不存在,创建新条目
-      currentApiSites.set(key, {
-        key,
-        name: site.name,
-        api: site.api,
-        detail: site.detail,
-        is_adult: site.is_adult || false,
-        from: 'config',
-        disabled: false,
-      });
-    }
+    currentApiSites.set(
+      key,
+      mergeSourceRecord(
+        'video',
+        currentApiSites.get(key),
+        {
+          key,
+          fields: {
+            name: site.name,
+            api: site.api,
+            detail: site.detail,
+            is_adult: site.is_adult || false,
+          },
+        },
+        'smart',
+        'config',
+      ),
+    );
   });
 
   // 检查现有源是否在 fileConfig.api_site 中，如果不在则标记为 custom
@@ -234,28 +234,27 @@ export function refineConfig(adminConfig: AdminConfig): AdminConfig {
   );
   livesFromFile.forEach(([key, site]) => {
     const existingLive = currentLives.get(key);
-    if (existingLive) {
-      existingLive.name = site.name;
-      existingLive.url = site.url;
-      existingLive.ua = site.ua;
-      existingLive.epg = site.epg;
-      existingLive.sortOrder = getLiveSourceSortOrder({
-        sortOrder: existingLive.sortOrder ?? site.sortOrder,
-      });
-    } else {
-      // 如果不存在，创建新条目
-      currentLives.set(key, {
+    const merged = mergeSourceRecord(
+      'live',
+      existingLive,
+      {
         key,
-        name: site.name,
-        url: site.url,
-        ua: site.ua,
-        epg: site.epg,
-        sortOrder: getLiveSourceSortOrder(site),
-        channelNumber: 0,
-        from: 'config',
-        disabled: false,
-      });
-    }
+        fields: {
+          name: site.name,
+          url: site.url,
+          ua: site.ua,
+          epg: site.epg,
+          sortOrder: getLiveSourceSortOrder(site),
+        },
+      },
+      'smart',
+      'config',
+    );
+    // 已有源保留后台排序值；新源采用配置文件排序值（缺失或无效按 1000）。
+    merged.sortOrder = getLiveSourceSortOrder({
+      sortOrder: existingLive?.sortOrder ?? site.sortOrder,
+    });
+    currentLives.set(key, merged);
   });
 
   // 检查现有 LiveConfig 是否在 fileConfig.lives 中，如果不在则标记为 custom
@@ -716,7 +715,10 @@ export async function getCacheTime(): Promise<number> {
 
 export async function getAvailableApiSites(user?: string): Promise<ApiSite[]> {
   const config = await getConfig();
-  const allApiSites = config.SourceConfig.filter((s) => !s.disabled);
+  // 导入覆盖信息只用于管理端，不进入前台／APK 接口。
+  const allApiSites = config.SourceConfig.filter((s) => !s.disabled).map(
+    ({ upstream: _upstream, overriddenFields: _overridden, ...site }) => site,
+  );
 
   if (!user) {
     return allApiSites;

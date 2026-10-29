@@ -6,7 +6,7 @@ import { persistAdminConfigMutation } from '@/lib/admin-config-mutation';
 import { getConfig, refineConfig } from '@/lib/config';
 import { db } from '@/lib/db';
 import { fetchVideoDetail } from '@/lib/fetchVideoDetail';
-import { refreshAllLiveChannels } from '@/lib/live-refresh';
+import { refreshLiveSources } from '@/lib/live-refresh';
 import { SearchResult } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -49,7 +49,8 @@ export async function GET(request: NextRequest) {
 
 async function cronJob() {
   await refreshConfig();
-  await refreshAllLiveChannels();
+  // 只刷新到期源：健康源按 1 小时周期，失败源按冷却阶梯。
+  await refreshLiveSources({ due: true });
   await refreshRecordAndFavorites();
 }
 

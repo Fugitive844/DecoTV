@@ -42,6 +42,11 @@ export interface Favorite {
   origin?: 'vod' | 'live';
 }
 
+export interface KvSetOptions {
+  nx?: boolean; // 仅在键不存在时写入
+  px?: number; // 过期毫秒数，仅用于锁和幂等标记
+}
+
 // 存储接口
 export interface IStorage {
   // 播放记录相关
@@ -89,6 +94,28 @@ export interface IStorage {
     cache: LiveChannelCacheRecord,
   ): Promise<void>;
   deleteLiveChannelCache(key: string): Promise<void>;
+
+  // 通用键值原语：大模型配置、翻译缓存和直播调度状态在其上实现，无 TTL（除非显式 px）。
+  kvGet(key: string): Promise<string | null>;
+  kvMGet(keys: string[]): Promise<(string | null)[]>;
+  kvSet(key: string, value: string, options?: KvSetOptions): Promise<boolean>;
+  kvDel(keys: string[]): Promise<void>;
+  // 原子比较并写入：expected 为 null 表示键必须不存在；value 为 null 表示删除。
+  kvCompareAndSet(
+    key: string,
+    expected: string | null,
+    value: string | null,
+    px?: number,
+  ): Promise<boolean>;
+  zAdd(key: string, score: number, member: string): Promise<void>;
+  zRem(key: string, members: string[]): Promise<void>;
+  zRangeByScore(
+    key: string,
+    min: number,
+    max: number,
+    limit: number,
+  ): Promise<string[]>;
+  zRangeAll(key: string): Promise<string[]>;
 
   // 跳过片头片尾配置相关
   getSkipConfig(

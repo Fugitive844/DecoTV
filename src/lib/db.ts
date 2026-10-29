@@ -8,6 +8,7 @@ import { RedisStorage } from './redis.db';
 import {
   Favorite,
   IStorage,
+  KvSetOptions,
   PlayAuditEntry,
   PlayRecord,
   SearchAuditEntry,
@@ -241,6 +242,53 @@ export class DbManager {
 
   async deleteLiveChannelCache(key: string): Promise<void> {
     await this.storage.deleteLiveChannelCache(key);
+  }
+
+  // ---------- 通用键值原语 ----------
+  kvGet(key: string): Promise<string | null> {
+    return this.storage.kvGet(key);
+  }
+
+  kvMGet(keys: string[]): Promise<(string | null)[]> {
+    return this.storage.kvMGet(keys);
+  }
+
+  kvSet(key: string, value: string, options?: KvSetOptions): Promise<boolean> {
+    return this.storage.kvSet(key, value, options);
+  }
+
+  kvDel(keys: string[]): Promise<void> {
+    return this.storage.kvDel(keys);
+  }
+
+  kvCompareAndSet(
+    key: string,
+    expected: string | null,
+    value: string | null,
+    px?: number,
+  ): Promise<boolean> {
+    return this.storage.kvCompareAndSet(key, expected, value, px);
+  }
+
+  zAdd(key: string, score: number, member: string): Promise<void> {
+    return this.storage.zAdd(key, score, member);
+  }
+
+  zRem(key: string, members: string[]): Promise<void> {
+    return this.storage.zRem(key, members);
+  }
+
+  zRangeByScore(
+    key: string,
+    min: number,
+    max: number,
+    limit: number,
+  ): Promise<string[]> {
+    return this.storage.zRangeByScore(key, min, max, limit);
+  }
+
+  zRangeAll(key: string): Promise<string[]> {
+    return this.storage.zRangeAll(key);
   }
 
   // ---------- 跳过片头片尾配置 ----------

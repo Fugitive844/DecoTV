@@ -13,10 +13,12 @@ import {
   searchAuditKey,
   sortPlayAudits,
 } from './audit';
+import { COMPARE_AND_SET_SCRIPT } from './kv-scripts.mjs';
 import type { LiveChannelCacheRecord } from './live-cache.types';
 import {
   Favorite,
   IStorage,
+  KvSetOptions,
   PlayAuditEntry,
   PlayRecord,
   SearchAuditEntry,
@@ -451,6 +453,83 @@ export abstract class BaseRedisStorage implements IStorage {
     await this.withRetry(() =>
       this.client.del(`live:channels:${encodeURIComponent(key)}`),
     );
+  }
+
+  // ---------- 通用键值原语（Kvrocks 同样支持） ----------
+  async kvGet(key: string): Promise<string | null> {
+    const value = await this.withRetry(() => this.client.get(key));
+    return value ?? null;
+  }
+
+  async kvMGet(keys: string[]): Promise<(string | null)[]> {
+    if (keys.length === 0) return [];
+    const values = await this.withRetry(() => this.client.mGet(keys));
+    return values.map((value) => value ?? null);
+  }
+
+  async kvSet(
+    key: string,
+    value: string,
+    options: KvSetOptions = {},
+  ): Promise<boolean> {
+    const setOptions: any = {};
+    if (options.nx) setOptions.NX = true;
+    if (options.px) setOptions.PX = Math.max(1, Math.floor(options.px));
+    const result = await this.withRetry(() =>
+      this.client.set(key, value, setOptions),
+    );
+    return result === 'OK';
+  }
+
+  async kvDel(keys: string[]): Promise<void> {
+    if (keys.length === 0) return;
+    await this.withRetry(() => this.client.del(keys));
+  }
+
+  async kvCompareAndSet(
+    key: string,
+    expected: string | null,
+    value: string | null,
+    px?: number,
+  ): Promise<boolean> {
+    // 不经过 withRetry：脚本可能已执行而连接断开，重放会把成功误判成冲突。
+    const result = await this.client.eval(COMPARE_AND_SET_SCRIPT, {
+      keys: [key],
+      arguments: [
+        expected === null ? '1' : '0',
+        expected ?? '',
+        value === null ? '1' : '0',
+        value ?? '',
+        px ? String(Math.max(1, Math.floor(px))) : '',
+      ],
+    });
+    return Number(result) === 1;
+  }
+
+  async zAdd(key: string, score: number, member: string): Promise<void> {
+    await this.withRetry(() => this.client.zAdd(key, { score, value: member }));
+  }
+
+  async zRem(key: string, members: string[]): Promise<void> {
+    if (members.length === 0) return;
+    await this.withRetry(() => this.client.zRem(key, members));
+  }
+
+  async zRangeByScore(
+    key: string,
+    min: number,
+    max: number,
+    limit: number,
+  ): Promise<string[]> {
+    return this.withRetry(() =>
+      this.client.zRangeByScore(key, min, max, {
+        LIMIT: { offset: 0, count: limit },
+      }),
+    );
+  }
+
+  async zRangeAll(key: string): Promise<string[]> {
+    return this.withRetry(() => this.client.zRange(key, 0, -1));
   }
 
   // ---------- 跳过片头片尾配置 ----------

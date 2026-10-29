@@ -19,6 +19,7 @@ import type { LiveChannelCacheRecord } from './live-cache.types';
 import {
   Favorite,
   IStorage,
+  KvSetOptions,
   PlayAuditEntry,
   PlayRecord,
   SearchAuditEntry,
@@ -217,6 +218,95 @@ export class MemoryStorage implements IStorage {
 
   async deleteLiveChannelCache(key: string): Promise<void> {
     this.liveChannelCaches.delete(key);
+  }
+
+  // ========== 通用键值原语（单进程内天然原子） ==========
+  private kv = new Map<string, { value: string; expireAt?: number }>();
+  private zsets = new Map<string, Map<string, number>>();
+
+  private kvRead(key: string): string | null {
+    const entry = this.kv.get(key);
+    if (!entry) return null;
+    if (entry.expireAt !== undefined && entry.expireAt <= Date.now()) {
+      this.kv.delete(key);
+      return null;
+    }
+    return entry.value;
+  }
+
+  private kvWrite(key: string, value: string | null, px?: number) {
+    if (value === null) this.kv.delete(key);
+    else
+      this.kv.set(key, {
+        value,
+        expireAt: px ? Date.now() + px : undefined,
+      });
+  }
+
+  async kvGet(key: string): Promise<string | null> {
+    return this.kvRead(key);
+  }
+
+  async kvMGet(keys: string[]): Promise<(string | null)[]> {
+    return keys.map((key) => this.kvRead(key));
+  }
+
+  async kvSet(
+    key: string,
+    value: string,
+    options: KvSetOptions = {},
+  ): Promise<boolean> {
+    if (options.nx && this.kvRead(key) !== null) return false;
+    this.kvWrite(key, value, options.px);
+    return true;
+  }
+
+  async kvDel(keys: string[]): Promise<void> {
+    keys.forEach((key) => this.kv.delete(key));
+  }
+
+  async kvCompareAndSet(
+    key: string,
+    expected: string | null,
+    value: string | null,
+    px?: number,
+  ): Promise<boolean> {
+    if (this.kvRead(key) !== expected) return false;
+    this.kvWrite(key, value, px);
+    return true;
+  }
+
+  async zAdd(key: string, score: number, member: string): Promise<void> {
+    let set = this.zsets.get(key);
+    if (!set) this.zsets.set(key, (set = new Map()));
+    set.set(member, score);
+  }
+
+  async zRem(key: string, members: string[]): Promise<void> {
+    const set = this.zsets.get(key);
+    members.forEach((member) => set?.delete(member));
+  }
+
+  private zSorted(key: string) {
+    return Array.from(this.zsets.get(key)?.entries() || []).sort(
+      (a, b) => a[1] - b[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0),
+    );
+  }
+
+  async zRangeByScore(
+    key: string,
+    min: number,
+    max: number,
+    limit: number,
+  ): Promise<string[]> {
+    return this.zSorted(key)
+      .filter(([, score]) => score >= min && score <= max)
+      .slice(0, limit)
+      .map(([member]) => member);
+  }
+
+  async zRangeAll(key: string): Promise<string[]> {
+    return this.zSorted(key).map(([member]) => member);
   }
 
   // ========== 跳过片头片尾配置 ==========
