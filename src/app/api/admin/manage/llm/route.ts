@@ -40,6 +40,7 @@ export async function GET(request: NextRequest) {
       baseUrl: config.baseUrl,
       model: config.model,
       hasApiKey: !!config.apiKey,
+      thinking: config.thinking !== false,
       apiKeyMasked: maskKey(config.apiKey),
       active: config.id === activeId,
       quota: await getQuota(kv, config.id),
@@ -85,6 +86,8 @@ export async function POST(request: NextRequest) {
           baseUrl: fields.baseUrl as string,
           model: fields.model as string,
           apiKey: typeof body.apiKey === 'string' ? body.apiKey.trim() : '',
+          // 深度思考默认开启（DeepSeek）。
+          thinking: body.thinking !== false,
           createdAt: now,
           updatedAt: now,
         };
@@ -109,6 +112,10 @@ export async function POST(request: NextRequest) {
             baseUrl: fields.baseUrl ?? current.baseUrl,
             model: fields.model ?? current.model,
             apiKey,
+            thinking:
+              typeof body.thinking === 'boolean'
+                ? body.thinking
+                : current.thinking !== false,
             updatedAt: now,
           },
           false,

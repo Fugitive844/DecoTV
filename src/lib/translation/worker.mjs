@@ -3,10 +3,16 @@
  * 每轮最多认领 100 条；满 100 条立即继续，不足 100 条（含 0 条）或本轮中止后休眠 2 分钟。
  */
 import process from 'node:process';
-import { clearTimeout, setTimeout } from 'node:timers';
+import {
+  clearInterval,
+  clearTimeout,
+  setInterval,
+  setTimeout,
+} from 'node:timers';
 import {
   buildChatCompletionsUrl,
   buildTranslationRequestBody,
+  isThinkingEnabled,
   MAX_SOURCE_TEXT_LENGTH,
   parseChatCompletionResponse,
   parseTranslationContent,
@@ -56,11 +62,12 @@ export function createTranslationWorker(deps) {
   const now = deps.now || Date.now;
   const batchSize = deps.batchSize ?? 100;
   const idleMs = deps.idleMs ?? 120_000;
-  const leaseMs = deps.leaseMs ?? 10 * 60_000;
+  const leaseMs = deps.leaseMs ?? 15 * 60_000;
   const transportRetryDelays = deps.transportRetryDelays ?? [2_000, 5_000];
   const contentRetryDelayMs = deps.contentRetryDelayMs ?? 120_000;
   const requestTimeoutMs = deps.requestTimeoutMs ?? 60_000;
-  const lockMs = deps.lockMs ?? 5 * 60_000;
+  // 锁有效期短、运行期间定时续期：长请求不丢锁，进程重启后新实例也能很快接手。
+  const lockMs = deps.lockMs ?? 90_000;
   const ownerId =
     deps.ownerId || `${process.pid}-${Math.random().toString(36).slice(2)}`;
   const log = deps.log || (() => {});
@@ -76,16 +83,33 @@ export function createTranslationWorker(deps) {
     });
   };
   resetWake();
-  const sleep =
+  const timerSleep = (/** @type {number} */ ms) =>
+    new Promise((resolve) => {
+      const timer = setTimeout(resolve, ms);
+      void wakePromise.then(() => {
+        clearTimeout(timer);
+        resolve(undefined);
+      });
+    });
+  const sleep = deps.sleep || timerSleep;
+  // 管理接口与后台任务可能是不同的模块实例，唤醒信号经数据库传递：
+  // 空闲休眠期间每 3 秒检查一次唤醒标记。
+  let lastWakeSeen = 0;
+  const readWake = async () =>
+    Number(await kv.kvGet(STORE_KEYS.workerWake).catch(() => null)) || 0;
+  const idleSleep =
     deps.sleep ||
-    ((ms) =>
-      new Promise((resolve) => {
-        const timer = setTimeout(resolve, ms);
-        void wakePromise.then(() => {
-          clearTimeout(timer);
-          resolve(undefined);
-        });
-      }));
+    (async (/** @type {number} */ ms) => {
+      const end = now() + ms;
+      while (running && now() < end) {
+        await timerSleep(Math.min(3_000, end - now()));
+        const wake = await readWake();
+        if (wake > lastWakeSeen) {
+          lastWakeSeen = wake;
+          return;
+        }
+      }
+    });
 
   // 站内模型请求串行执行器：自动批次与手动单行共用，不并发。
   /** @type {Promise<unknown>} */
@@ -110,7 +134,10 @@ export function createTranslationWorker(deps) {
           Authorization: `Bearer ${config.apiKey}`,
         },
         body,
-        requestTimeoutMs,
+        // 深度思考需要更长时间生成。
+        isThinkingEnabled(config)
+          ? Math.max(requestTimeoutMs, 180_000)
+          : requestTimeoutMs,
       );
     } catch (error) {
       const message =
@@ -121,7 +148,15 @@ export function createTranslationWorker(deps) {
     }
     const outer = parseChatCompletionResponse(response.status, response.text);
     const idToText = new Map(items.map((item) => [item.id, item.text]));
-    return parseTranslationContent(outer.content, idToText, outer.truncated);
+    const mustTranslateIds = new Set(
+      items.filter((item) => item.mustTranslate).map((item) => item.id),
+    );
+    return parseTranslationContent(
+      outer.content,
+      idToText,
+      outer.truncated,
+      mustTranslateIds,
+    );
   };
 
   // 调用统计只用于后台展示，写入失败不能中断本轮或导致重复请求模型。
@@ -280,9 +315,11 @@ export function createTranslationWorker(deps) {
       return { claimed: claimed.length, aborted: true, reason: 'no_config' };
     }
 
+    // 管理员标记为需要翻译的原文要求模型必须翻译，不能再返回无需翻译。
     const requestItems = remaining.map((item, index) => ({
       id: String(index + 1),
       text: item.text,
+      mustTranslate: item.needsTranslation === 'yes',
     }));
     let outcome = null;
     for (let attempt = 0; attempt <= transportRetryDelays.length; attempt++) {
@@ -378,6 +415,8 @@ export function createTranslationWorker(deps) {
   let running = false;
   /** @type {Promise<void> | null} */
   let loop = null;
+  /** @type {ReturnType<typeof setInterval> | null} */
+  let heartbeat = null;
   /** @type {Set<string>} */
   const manualInFlight = new Set();
 
@@ -386,7 +425,17 @@ export function createTranslationWorker(deps) {
     start() {
       if (loop) return loop;
       running = true;
+      heartbeat = setInterval(
+        () => {
+          void kv
+            .kvCompareAndSet(STORE_KEYS.workerLock, ownerId, ownerId, lockMs)
+            .catch(() => undefined);
+        },
+        Math.max(1_000, Math.floor(lockMs / 3)),
+      );
+      heartbeat.unref?.();
       loop = (async () => {
+        lastWakeSeen = await readWake();
         while (running) {
           let result = { claimed: 0, aborted: true };
           try {
@@ -406,7 +455,7 @@ export function createTranslationWorker(deps) {
           await setWorkerState(kv, { sleepingUntil: now() + idleMs }).catch(
             () => {},
           );
-          await sleep(idleMs);
+          await idleSleep(idleMs);
           resetWake();
         }
       })();
@@ -414,11 +463,16 @@ export function createTranslationWorker(deps) {
     },
     stop() {
       running = false;
+      if (heartbeat) clearInterval(heartbeat);
+      heartbeat = null;
       wakeResolve();
     },
     /** 立即结束休眠，开始下一轮（例如收集历史后）。 */
     wake() {
       wakeResolve();
+      void kv
+        .kvSet(STORE_KEYS.workerWake, String(Date.now()))
+        .catch(() => undefined);
     },
     /**
      * 任意行手动翻译一次：绕过且不扣自动额度，只发 1 次 HTTP，不自动重试。
@@ -437,7 +491,9 @@ export function createTranslationWorker(deps) {
         let outcome;
         try {
           outcome = await exclusive(() =>
-            callModel(config, [{ id: '1', text }]),
+            callModel(config, [
+              { id: '1', text, mustTranslate: item.needsTranslation === 'yes' },
+            ]),
           );
           await recordCall(config.id, { kind: 'manual' });
         } catch (error) {

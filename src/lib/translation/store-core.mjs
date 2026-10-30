@@ -4,6 +4,8 @@
  */
 import { Buffer } from 'node:buffer';
 
+import { isMeaningfulTranslation } from './text-filter.mjs';
+
 export const STATUS = {
   PENDING: 'pending',
   PROCESSING: 'processing',
@@ -31,6 +33,7 @@ const KEY = {
   stats: (/** @type {string} */ id) => `llm:stats:${id}`,
   workerState: 'tr:worker:state',
   workerLock: 'tr:worker:lock',
+  workerWake: 'tr:worker:wake',
 };
 export const STORE_KEYS = KEY;
 
@@ -183,7 +186,12 @@ export async function getTranslationMap(kv, texts) {
     );
     raws.forEach((raw, index) => {
       const item = parseJson(raw);
-      if (item?.status === STATUS.SUCCESS && item.translation)
+      // 重新排队的记录在新结果返回前继续展示旧译文；无需翻译的不展示。
+      if (
+        item?.translation &&
+        item.status !== STATUS.NO_NEED &&
+        isMeaningfulTranslation(chunk[index], item.translation)
+      )
         map.set(chunk[index], item.translation);
     });
   }
@@ -313,6 +321,110 @@ export async function editItem(
   return result.item;
 }
 
+export const BATCH_STATUSES = [
+  STATUS.PENDING,
+  STATUS.NO_NEED,
+  STATUS.SUCCESS,
+  STATUS.FAILED,
+];
+
+/**
+ * 计算批量修改后的记录；返回 undefined 表示该条不适用（跳过）。
+ * - 需要翻译改为「否」或状态改为「无需翻译」：清空译文，形成无需翻译终态。
+ * - 状态改为「待翻译」：清零失败次数并立即排队（旧译文保留展示，直到新结果返回）。
+ * - 只把需要翻译改为「是／未知」：原本无需翻译的记录自动重新排队。
+ * - 状态改为「成功」只适用于已有译文的记录。
+ * @param {TranslationItem} current
+ * @param {{ needsTranslation?: 'unknown' | 'yes' | 'no', status?: string }} patch
+ * @param {number} now
+ */
+export function applyBatchPatch(current, patch, now) {
+  const needs = patch.needsTranslation;
+  const status = patch.status;
+  const base = { ...current, leaseUntil: 0, updatedAt: now };
+  const requeue = (
+    /** @type {TranslationItem['needsTranslation']} */ value,
+  ) => ({
+    ...base,
+    needsTranslation: value,
+    status: STATUS.PENDING,
+    failCount: 0,
+    lastError: '',
+    nextAttemptAt: now,
+  });
+  let next;
+  if (needs === 'no' || status === STATUS.NO_NEED)
+    next = {
+      ...base,
+      needsTranslation: 'no',
+      status: STATUS.NO_NEED,
+      translation: '',
+      failCount: 0,
+      lastError: '',
+    };
+  else if (status === STATUS.PENDING)
+    next = requeue(
+      needs ??
+        (current.needsTranslation === 'no'
+          ? 'unknown'
+          : current.needsTranslation),
+    );
+  else if (status === STATUS.FAILED)
+    next = {
+      ...base,
+      needsTranslation: needs ?? current.needsTranslation,
+      status: STATUS.FAILED,
+      failCount: MAX_FAIL_COUNT,
+    };
+  else if (status === STATUS.SUCCESS) {
+    if (!current.translation) return undefined;
+    next = {
+      ...base,
+      needsTranslation: 'yes',
+      status: STATUS.SUCCESS,
+      lastError: '',
+    };
+  } else if (needs) {
+    next =
+      current.status === STATUS.NO_NEED
+        ? requeue(needs)
+        : { ...base, needsTranslation: needs };
+  } else return undefined;
+  return /** @type {TranslationItem} */ ({
+    ...next,
+    version: current.version + 1,
+  });
+}
+
+/**
+ * 筛选后批量修改是否需要翻译与状态。版本号递增，执行中的旧任务结果不会覆盖。
+ * @param {Kv} kv @param {string[]} texts
+ * @param {{ needsTranslation?: 'unknown' | 'yes' | 'no', status?: string }} patch
+ * @param {number} now
+ */
+export async function batchUpdateItems(kv, texts, patch, now) {
+  if (
+    patch.needsTranslation === 'no' &&
+    patch.status &&
+    patch.status !== STATUS.NO_NEED
+  )
+    throw new Error('「无需翻译」只能配合状态「无需翻译」');
+  if (patch.status && !BATCH_STATUSES.includes(patch.status))
+    throw new Error('不支持的批量状态');
+  if (!patch.status && !patch.needsTranslation)
+    throw new Error('请至少选择一项修改');
+  let updated = 0;
+  let skipped = 0;
+  for (const text of Array.from(new Set(texts))) {
+    const result = await updateItem(kv, text, (current) =>
+      current ? applyBatchPatch(current, patch, now) : undefined,
+    );
+    if (result.changed) updated++;
+    else skipped++;
+  }
+  return { updated, skipped };
+}
+
 /** 重置失败次数并重新排队（显式操作）。 */
 export async function resetItem(kv, text, now) {
   const result = await updateItem(kv, text, (current) => {
@@ -387,7 +499,7 @@ export async function repairIndexes(kv) {
 
 /**
  * @typedef {{
- *   id: string, name: string, baseUrl: string, model: string, apiKey: string,
+ *   id: string, name: string, baseUrl: string, model: string, apiKey: string, thinking?: boolean,
  *   createdAt: number, updatedAt: number
  * }} LlmConfig
  */

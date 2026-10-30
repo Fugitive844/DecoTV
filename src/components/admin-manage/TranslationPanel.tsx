@@ -68,6 +68,12 @@ const STATUS_STYLE: Record<string, string> = {
     'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300',
 };
 const NEEDS_LABEL = { unknown: '未知', yes: '是', no: '否' };
+const BATCH_STATUS_LABEL: Record<string, string> = {
+  pending: '待翻译（清零失败并重新排队）',
+  no_need: '无需翻译',
+  success: '成功（仅限已有译文）',
+  failed: '失败（停止自动翻译）',
+};
 const SOURCE_LABEL: Record<string, string> = {
   model: '模型',
   manual: '人工',
@@ -93,7 +99,69 @@ export default function TranslationPanel() {
     text: string;
   } | null>(null);
 
+  // 批量选择：勾选的原文，或「全部筛选结果」（由服务端按同一筛选条件选中）。
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [allFiltered, setAllFiltered] = useState(false);
+  const [batchNeeds, setBatchNeeds] = useState('');
+  const [batchStatus, setBatchStatus] = useState('');
+
   useEffect(() => setPage(1), [q, status, needs, pageSize]);
+  useEffect(() => {
+    setSelected(new Set());
+    setAllFiltered(false);
+  }, [q, status, needs]);
+
+  const pageTexts = (list.data?.items || []).map((item) => item.text);
+  const pageAllSelected =
+    pageTexts.length > 0 && pageTexts.every((text) => selected.has(text));
+  const selectedCount = allFiltered ? list.data?.total || 0 : selected.size;
+  const toggleRow = (text: string, checked: boolean) => {
+    setAllFiltered(false);
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(text);
+      else next.delete(text);
+      return next;
+    });
+  };
+  const togglePage = (checked: boolean) => {
+    setAllFiltered(false);
+    setSelected((prev) => {
+      const next = new Set(prev);
+      pageTexts.forEach((text) =>
+        checked ? next.add(text) : next.delete(text),
+      );
+      return next;
+    });
+  };
+  const applyBatch = async () => {
+    const target = allFiltered
+      ? `全部筛选结果 ${selectedCount} 条`
+      : `选中的 ${selectedCount} 条`;
+    const changes = [
+      batchNeeds &&
+        `需要翻译改为「${NEEDS_LABEL[batchNeeds as keyof typeof NEEDS_LABEL]}」`,
+      batchStatus && `状态改为「${BATCH_STATUS_LABEL[batchStatus]}」`,
+    ]
+      .filter(Boolean)
+      .join('，');
+    if (!window.confirm(`确定把${target}${changes}？`)) return;
+    const ok = await act(
+      {
+        action: 'batch_update',
+        ...(allFiltered
+          ? { filter: { q, status, needs } }
+          : { texts: Array.from(selected) }),
+        needsTranslation: batchNeeds || undefined,
+        status: batchStatus || undefined,
+      },
+      '批量修改完成：已更新 {updated} 条，跳过 {skipped} 条（不适用）',
+    );
+    if (ok) {
+      setSelected(new Set());
+      setAllFiltered(false);
+    }
+  };
 
   const act = async (
     body: Record<string, unknown>,
@@ -106,7 +174,10 @@ export default function TranslationPanel() {
       const data = await postJson(API, body);
       setMessage({
         kind: 'success',
-        text: success.replace('{created}', String(data.created ?? 0)),
+        text: success
+          .replace('{created}', String(data.created ?? 0))
+          .replace('{updated}', String(data.updated ?? 0))
+          .replace('{skipped}', String(data.skipped ?? 0)),
       });
       list.reload();
       state.reload();
@@ -256,11 +327,82 @@ export default function TranslationPanel() {
             <option value='no'>否</option>
           </select>
         </div>
+        <div className='mb-3 flex flex-wrap items-center gap-2 rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-700 dark:bg-gray-900/40 dark:text-gray-300'>
+          <span className='font-medium'>
+            {allFiltered
+              ? `已选全部筛选结果 ${selectedCount} 条`
+              : `已选 ${selectedCount} 条`}
+          </span>
+          <button
+            className={buttonStyles.secondarySmall}
+            onClick={() => {
+              setSelected(new Set());
+              setAllFiltered(true);
+            }}
+            disabled={!list.data?.total}
+            title='按当前搜索和筛选条件选中所有页的结果'
+          >
+            全选筛选结果（{list.data?.total ?? 0}）
+          </button>
+          <button
+            className={buttonStyles.secondarySmall}
+            onClick={() => {
+              setSelected(new Set());
+              setAllFiltered(false);
+            }}
+          >
+            清空选择
+          </button>
+          <span className='mx-1 hidden h-5 w-px bg-gray-300 sm:inline-block dark:bg-gray-600' />
+          <select
+            value={batchNeeds}
+            onChange={(e) => setBatchNeeds(e.target.value)}
+            className='rounded-lg border border-gray-300 bg-white px-2 py-1 dark:border-gray-600 dark:bg-gray-700'
+          >
+            <option value=''>需要翻译：不修改</option>
+            <option value='yes'>需要翻译：是（强制翻译）</option>
+            <option value='unknown'>需要翻译：未知</option>
+            <option value='no'>需要翻译：否</option>
+          </select>
+          <select
+            value={batchStatus}
+            onChange={(e) => setBatchStatus(e.target.value)}
+            className='rounded-lg border border-gray-300 bg-white px-2 py-1 dark:border-gray-600 dark:bg-gray-700'
+          >
+            <option value=''>状态：不修改</option>
+            {Object.entries(BATCH_STATUS_LABEL).map(([key, label]) => (
+              <option key={key} value={key}>
+                状态：{label}
+              </option>
+            ))}
+          </select>
+          <button
+            className={
+              !selectedCount || (!batchNeeds && !batchStatus) || !!busyRow
+                ? buttonStyles.disabledSmall
+                : buttonStyles.primarySmall
+            }
+            disabled={
+              !selectedCount || (!batchNeeds && !batchStatus) || !!busyRow
+            }
+            onClick={applyBatch}
+          >
+            批量修改
+          </button>
+        </div>
         {list.error && <Notice kind='error'>{list.error}</Notice>}
         <div className='overflow-x-auto'>
           <table className='w-full min-w-[52rem] text-sm'>
             <thead className='whitespace-nowrap bg-gray-50 text-left text-gray-600 dark:bg-gray-900/40 dark:text-gray-300'>
               <tr>
+                <th className='px-3 py-2'>
+                  <input
+                    type='checkbox'
+                    aria-label='选择本页'
+                    checked={allFiltered || pageAllSelected}
+                    onChange={(e) => togglePage(e.target.checked)}
+                  />
+                </th>
                 <th className='px-3 py-2'>原文</th>
                 <th className='px-3 py-2'>译文</th>
                 <th className='px-3 py-2'>需翻译</th>
@@ -275,6 +417,14 @@ export default function TranslationPanel() {
             <tbody className='divide-y divide-gray-200 dark:divide-gray-700'>
               {(list.data?.items || []).map((item) => (
                 <tr key={item.text}>
+                  <td className='px-3 py-2'>
+                    <input
+                      type='checkbox'
+                      aria-label={`选择 ${item.text}`}
+                      checked={allFiltered || selected.has(item.text)}
+                      onChange={(e) => toggleRow(item.text, e.target.checked)}
+                    />
+                  </td>
                   <td className='max-w-[14rem] break-all px-3 py-2 text-gray-900 dark:text-gray-100'>
                     {item.text}
                   </td>

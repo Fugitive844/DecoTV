@@ -53,6 +53,8 @@ const stats = {
   batches: [],
   models: new Set(),
   thinkingDisabled: 0,
+  withTemperature: 0,
+  mustTranslate: 0,
   authorized: 0,
   scenarios: {},
 };
@@ -91,7 +93,7 @@ const completion = (content, finishReason = 'stop') =>
 
 const translate = (items) =>
   items.map((item) =>
-    /^[A-Z0-9]{2,4}$/.test(item.text) || random() < 0.1
+    !item.mustTranslate && (/^[A-Z0-9]{2,4}$/.test(item.text) || random() < 0.1)
       ? { id: item.id, needsTranslation: false, translation: '' }
       : {
           id: item.id,
@@ -123,6 +125,8 @@ const server = http.createServer(async (req, res) => {
       batches: [],
       models: new Set(),
       thinkingDisabled: 0,
+      withTemperature: 0,
+      mustTranslate: 0,
       authorized: 0,
       scenarios: {},
     });
@@ -161,6 +165,8 @@ const server = http.createServer(async (req, res) => {
   if (stats.batches.length > 200) stats.batches.shift();
   if (request.model) stats.models.add(request.model);
   if (request.thinking?.type === 'disabled') stats.thinkingDisabled++;
+  if ('temperature' in request) stats.withTemperature++;
+  stats.mustTranslate += items.filter((item) => item.mustTranslate).length;
   if (/^Bearer .+/.test(req.headers.authorization || '')) stats.authorized++;
 
   const current = nextScenario();

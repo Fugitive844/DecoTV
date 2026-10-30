@@ -13,6 +13,7 @@ interface LlmItem {
   baseUrl: string;
   model: string;
   hasApiKey: boolean;
+  thinking: boolean;
   apiKeyMasked: string;
   active: boolean;
   quota: number;
@@ -45,6 +46,7 @@ export default function LlmConfigPanel() {
     baseUrl: '',
     model: '',
     apiKey: '',
+    thinking: true,
   });
   const [quotaDraft, setQuotaDraft] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<{
@@ -79,6 +81,7 @@ export default function LlmConfigPanel() {
       baseUrl: item?.baseUrl || list.data?.defaults.baseUrl || '',
       model: item?.model || list.data?.defaults.model || '',
       apiKey: '',
+      thinking: item ? item.thinking : true,
     });
   };
 
@@ -198,6 +201,7 @@ export default function LlmConfigPanel() {
             <div className='mt-3 grid gap-1 text-gray-700 dark:text-gray-300 md:grid-cols-2'>
               <span>baseUrl：{item.baseUrl}</span>
               <span>模型 ID：{item.model}</span>
+              <span>深度思考：{item.thinking ? '开启' : '关闭'}</span>
               <span>
                 API Key：{item.hasApiKey ? item.apiKeyMasked : '未设置'}
               </span>
@@ -307,9 +311,19 @@ export default function LlmConfigPanel() {
                     }
                   />
                 </label>
+                <label className='flex items-center gap-2 text-gray-700 dark:text-gray-300'>
+                  <input
+                    type='checkbox'
+                    checked={form.thinking}
+                    onChange={(e) =>
+                      setForm({ ...form, thinking: e.target.checked })
+                    }
+                  />
+                  开启深度思考（翻译更准确，但更慢、消耗更多 token）
+                </label>
                 <p className='text-xs text-gray-500'>
-                  默认关闭深度思考（DeepSeek 自动附带 thinking:
-                  disabled）。密钥仅保存在服务端，列表脱敏显示。
+                  深度思考开关通过 DeepSeek 的 thinking
+                  参数生效，其他兼容接口不发送该参数。密钥仅保存在服务端，列表脱敏显示。
                 </p>
               </div>
               <div className='flex justify-end gap-2 border-t border-gray-200 px-5 py-3 dark:border-gray-700'>

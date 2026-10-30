@@ -16,6 +16,7 @@ import {
   translationKv as kv,
 } from '@/lib/translation/store';
 import {
+  batchUpdateItems,
   editItem,
   getActiveLlmId,
   getWorkerState,
@@ -45,26 +46,48 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  const q = (searchParams.get('q') || '').trim().toLowerCase();
-  const status = searchParams.get('status') || '';
-  const needs = searchParams.get('needs') || '';
   const { page, pageSize } = parsePaging(searchParams);
   const all = await listAllItems(kv);
   const counts: Record<string, number> = {};
   all.forEach((item) => {
     counts[item.status] = (counts[item.status] || 0) + 1;
   });
-  const filtered = all
-    .filter(
-      (item) =>
-        (!q ||
-          item.text.toLowerCase().includes(q) ||
-          item.translation.toLowerCase().includes(q)) &&
-        (!status || item.status === status) &&
-        (!needs || item.needsTranslation === needs),
-    )
-    .sort((a, b) => b.updatedAt - a.updatedAt);
+  const filtered = filterItems(all, {
+    q: searchParams.get('q') || '',
+    status: searchParams.get('status') || '',
+    needs: searchParams.get('needs') || '',
+  }).sort(
+    (a, b) =>
+      b.updatedAt - a.updatedAt ||
+      (a.text < b.text ? -1 : a.text > b.text ? 1 : 0),
+  );
   return jsonNoStore({ ...paginate(filtered, page, pageSize), counts });
+}
+
+interface ItemFilter {
+  q?: string;
+  status?: string;
+  needs?: string;
+}
+
+// 列表查询与「全选筛选结果」批量修改共用同一套筛选条件。
+function filterItems<
+  T extends {
+    text: string;
+    translation: string;
+    status: string;
+    needsTranslation: string;
+  },
+>(items: T[], filter: ItemFilter) {
+  const q = (filter.q || '').trim().toLowerCase();
+  return items.filter(
+    (item) =>
+      (!q ||
+        item.text.toLowerCase().includes(q) ||
+        item.translation.toLowerCase().includes(q)) &&
+      (!filter.status || item.status === filter.status) &&
+      (!filter.needs || item.needsTranslation === filter.needs),
+  );
 }
 
 export async function POST(request: NextRequest) {
@@ -118,6 +141,35 @@ export async function POST(request: NextRequest) {
         }
         getTranslationWorker().wake();
         return jsonNoStore({ ok: true, sources, created });
+      }
+      case 'batch_update': {
+        // texts：勾选的记录；filter：按当前筛选条件选中全部结果。
+        let texts: string[] = [];
+        if (Array.isArray(body.texts)) texts = body.texts.map(String);
+        else if (body.filter && typeof body.filter === 'object')
+          texts = filterItems(
+            await listAllItems(kv),
+            body.filter as ItemFilter,
+          ).map((item) => item.text);
+        if (texts.length === 0)
+          return jsonNoStore({ error: '没有选中任何记录' }, { status: 400 });
+        const needs = ['unknown', 'yes', 'no'].includes(
+          String(body.needsTranslation),
+        )
+          ? (body.needsTranslation as 'unknown' | 'yes' | 'no')
+          : undefined;
+        const status =
+          typeof body.status === 'string' && body.status
+            ? body.status
+            : undefined;
+        const result = await batchUpdateItems(
+          kv,
+          texts,
+          { needsTranslation: needs, status },
+          now,
+        );
+        getTranslationWorker().wake();
+        return jsonNoStore({ ok: true, total: texts.length, ...result });
       }
       case 'run_now': {
         getTranslationWorker().wake();

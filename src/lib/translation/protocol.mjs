@@ -4,13 +4,19 @@
  */
 import { URL } from 'node:url';
 
+import { hasHanCharacter, restoreTechnicalTags } from './text-filter.mjs';
+
 export const MAX_SOURCE_TEXT_LENGTH = 200;
 export const MAX_TRANSLATION_LENGTH = 200;
 
 export const SYSTEM_PROMPT = [
   '你是直播频道名称翻译器。把用户给出的每个频道名或频道分类名翻译成简体中文。',
-  '保留品牌、地区、数字、清晰度（如 HD、4K、FHD）等信息；不要编造，不要输出解释。',
-  '如果某项无需翻译（如纯品牌缩写、纯数字、已是通用写法），needsTranslation 设为 false，translation 为空字符串。',
+  '规则：',
+  '1. 只要名称里有任何可以翻译的词（普通词汇、国家／地区／城市名、语言名、节目类型如 News、Sports、Music、Movies、Kids、Religious 等），就必须翻译，needsTranslation 为 true；其中的品牌、台标缩写、数字原样保留在译文里。例："3ABN Russia" → "3ABN 俄罗斯"，"CBC News Network" → "CBC 新闻网"，"15+ Music" → "15+ 音乐"。',
+  '2. 只有整个名称完全由品牌名、字母缩写或代号组成、没有任何可翻译的词时（如 "CNN"、"3sat"、"RTL"），needsTranslation 才为 false，translation 为空字符串。拿不准时按需要翻译处理。',
+  '3. 输入项带 "mustTranslate": true 时必须翻译，needsTranslation 一律为 true，不能返回 false。',
+  '4. 清晰度和各类标注必须原样保留在译文末尾，不得删除、翻译或改写，例如 (1080p)、(720p)、(576p)、HD、FHD、4K、[Geo-blocked]、[Not 24/7]、Ⓢ、Ⓖ、Ⓥ。例："CBC News Network (1080p)" → "CBC 新闻网 (1080p)"，"CT-N Live Stream 2 (360p) [Not 24/7]" → "CT-N 直播流 2 (360p) [Not 24/7]"。',
+  '5. 不要编造内容，不要输出解释。',
   '只返回 JSON：{"items":[{"id":"1","needsTranslation":true,"translation":"新闻"}]}，每个输入 id 恰好对应一项。',
 ].join('\n');
 
@@ -48,8 +54,13 @@ export function isDeepSeekBaseUrl(baseUrl) {
   }
 }
 
+/** 深度思考默认开启；配置显式关闭时才关闭。 @param {{ thinking?: boolean }} config */
+export function isThinkingEnabled(config) {
+  return config.thinking !== false;
+}
+
 /**
- * @param {{ baseUrl: string, model: string }} config
+ * @param {{ baseUrl: string, model: string, thinking?: boolean }} config
  * @param {{ id: string, text: string }[]} items
  */
 export function buildTranslationRequestBody(config, items) {
@@ -61,17 +72,28 @@ export function buildTranslationRequestBody(config, items) {
       {
         role: 'user',
         content: JSON.stringify({
-          items: items.map((item) => ({ id: item.id, text: item.text })),
+          items: items.map((item) =>
+            item.mustTranslate
+              ? { id: item.id, text: item.text, mustTranslate: true }
+              : { id: item.id, text: item.text },
+          ),
         }),
       },
     ],
     response_format: { type: 'json_object' },
     stream: false,
-    temperature: 0.2,
-    max_tokens: Math.min(8192, 256 + items.length * 80),
   };
-  // 默认关闭深度思考：DeepSeek 默认开启，需显式关闭。
-  if (isDeepSeekBaseUrl(config.baseUrl)) body.thinking = { type: 'disabled' };
+  const thinking = isThinkingEnabled(config);
+  if (thinking) {
+    // 思考过程也占用输出额度；思考模式下 temperature 不生效，不发送。
+    body.max_tokens = Math.min(32768, 4096 + items.length * 120);
+  } else {
+    body.temperature = 0.2;
+    body.max_tokens = Math.min(8192, 256 + items.length * 80);
+  }
+  // thinking 是 DeepSeek 扩展字段，只发给 DeepSeek 主机。
+  if (isDeepSeekBaseUrl(config.baseUrl))
+    body.thinking = { type: thinking ? 'enabled' : 'disabled' };
   return body;
 }
 
@@ -136,7 +158,12 @@ export function parseChatCompletionResponse(status, text) {
  *   protocolErrors: string[]
  * }}
  */
-export function parseTranslationContent(content, idToText, truncated = false) {
+export function parseTranslationContent(
+  content,
+  idToText,
+  truncated = false,
+  mustTranslateIds = new Set(),
+) {
   /** @type {Map<string, any>} */
   const results = new Map();
   /** @type {string[]} */
@@ -176,6 +203,8 @@ export function parseTranslationContent(content, idToText, truncated = false) {
     let result;
     if (typeof item.needsTranslation !== 'boolean') {
       result = { kind: 'fail', error: '缺少 needsTranslation 标记' };
+    } else if (!item.needsTranslation && mustTranslateIds.has(id)) {
+      result = { kind: 'fail', error: '已标记必须翻译，但模型返回无需翻译' };
     } else if (!item.needsTranslation) {
       result = { kind: 'no_need' };
     } else if (
@@ -183,10 +212,22 @@ export function parseTranslationContent(content, idToText, truncated = false) {
       !item.translation.trim()
     ) {
       result = { kind: 'fail', error: '需要翻译但译文为空' };
+    } else if (!hasHanCharacter(item.translation)) {
+      // 声称需要翻译却原样返回（没有任何中文）：视为没有翻译，不保存为成功。
+      result = mustTranslateIds.has(id)
+        ? { kind: 'fail', error: '已标记必须翻译，但译文没有中文' }
+        : { kind: 'no_need' };
     } else if (item.translation.trim().length > MAX_TRANSLATION_LENGTH) {
       result = { kind: 'fail', error: '译文过长' };
     } else {
-      result = { kind: 'success', translation: item.translation.trim() };
+      // 模型漏掉的清晰度、地区限制等标注从原文补回。
+      result = {
+        kind: 'success',
+        translation: restoreTechnicalTags(
+          /** @type {string} */ (idToText.get(id)),
+          item.translation.trim(),
+        ),
+      };
     }
     const previous = seen.get(id);
     if (previous && JSON.stringify(previous) !== JSON.stringify(result)) {

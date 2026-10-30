@@ -17,6 +17,7 @@ import {
   getItem,
   getTranslationMap,
   rekeyItem,
+  batchUpdateItems,
   resetItem,
   saveLlmConfig,
   setActiveLlmId,
@@ -26,6 +27,7 @@ import {
   STATUS,
 } from '../src/lib/translation/store-core.mjs';
 import {
+  restoreTechnicalTags,
   collectCandidateTexts,
   hasHanCharacter,
   isTranslationCandidate,
@@ -137,7 +139,17 @@ test('baseUrl 规范化只追加一次，DeepSeek 主机才关闭思考', () => 
     { baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash' },
     [{ id: '1', text: 'a' }],
   );
-  assert.deepEqual(ds.thinking, { type: 'disabled' });
+  assert.deepEqual(ds.thinking, { type: 'enabled' }, '深度思考默认开启');
+  assert.equal('temperature' in ds, false, '思考模式不发送 temperature');
+  const dsOff = buildTranslationRequestBody(
+    {
+      baseUrl: 'https://api.deepseek.com',
+      model: 'deepseek-flash',
+      thinking: false,
+    },
+    [{ id: '1', text: 'a' }],
+  );
+  assert.deepEqual(dsOff.thinking, { type: 'disabled' });
   assert.deepEqual(ds.response_format, { type: 'json_object' });
   const other = buildTranslationRequestBody(
     { baseUrl: 'http://mock:18080/v1', model: 'm' },
@@ -535,4 +547,151 @@ test('模型成功但写库失败：重试落库，不重新请求模型', async
   await wrapped.runRound();
   assert.equal(model.calls.length, 1);
   assert.equal((await getItem(kv, 'A')).status, STATUS.SUCCESS);
+});
+
+test('清晰度、地区限制、圆圈标记漏掉时从原文补回，已有中文清晰度不重复', () => {
+  assert.equal(
+    restoreTechnicalTags('CBC News Network (1080p)', 'CBC新闻网'),
+    'CBC新闻网 (1080p)',
+  );
+  assert.equal(
+    restoreTechnicalTags('CT-N Live (360p) [Not 24/7]', 'CT-N 直播 (360p)'),
+    'CT-N 直播 (360p) [Not 24/7]',
+  );
+  assert.equal(restoreTechnicalTags('Arena 4K', '竞技场'), '竞技场 4K');
+  assert.equal(
+    restoreTechnicalTags('CBeebies HD', 'CBeebies 高清'),
+    'CBeebies 高清',
+  );
+  assert.equal(restoreTechnicalTags('3sat Ⓖ', '3sat Ⓖ'), '3sat Ⓖ');
+  const ids = new Map([['1', 'CBC News (720p) [Geo-blocked]']]);
+  const parsed = parseTranslationContent(
+    JSON.stringify({
+      items: [{ id: '1', needsTranslation: true, translation: 'CBC新闻' }],
+    }),
+    ids,
+  );
+  assert.equal(
+    parsed.results.get('1').translation,
+    'CBC新闻 (720p) [Geo-blocked]',
+  );
+});
+
+test('标记必须翻译的原文：请求带 mustTranslate，模型仍返回无需翻译时计失败', async () => {
+  const kv = createMemoryKv();
+  const model = fakeModel((items) => ({
+    status: 200,
+    text: completion(
+      JSON.stringify({
+        items: items.map((i) => ({
+          id: i.id,
+          needsTranslation: false,
+          translation: '',
+        })),
+      }),
+    ),
+  }));
+  const { worker } = await setupWorker(kv, model.httpPost);
+  await enqueueTexts(kv, ['3ABN Russia'], 0);
+  await batchUpdateItems(kv, ['3ABN Russia'], { needsTranslation: 'yes' }, 1);
+  await worker.runRound();
+  assert.equal(model.calls[0].items[0].mustTranslate, true);
+  const item = await getItem(kv, '3ABN Russia');
+  assert.equal(item.status, STATUS.RETRY_WAIT);
+  assert.match(item.lastError, /必须翻译/);
+});
+
+test('批量修改：无需翻译改为需要翻译后重新排队；重新排队期间旧译文继续展示', async () => {
+  const kv = createMemoryKv();
+  await enqueueTexts(kv, ['A', 'B', 'C'], 0);
+  await editItem(kv, 'A', { translation: '', needsTranslation: 'no' }, 1);
+  await editItem(kv, 'B', { translation: '乙', needsTranslation: 'yes' }, 1);
+  let r = await batchUpdateItems(
+    kv,
+    ['A', 'B', 'C', '不存在'],
+    { needsTranslation: 'yes' },
+    2,
+  );
+  assert.deepEqual(r, { updated: 3, skipped: 1 });
+  const a = await getItem(kv, 'A');
+  assert.equal(a.status, STATUS.PENDING);
+  assert.equal(a.needsTranslation, 'yes');
+  assert.equal(
+    (await getItem(kv, 'B')).status,
+    STATUS.SUCCESS,
+    '只改需翻译时成功项状态不变',
+  );
+  await batchUpdateItems(kv, ['B'], { status: 'pending' }, 3);
+  assert.equal((await getItem(kv, 'B')).status, STATUS.PENDING);
+  assert.equal(
+    (await getTranslationMap(kv, ['B'])).get('B'),
+    '乙',
+    '重新排队期间旧译文继续展示',
+  );
+  r = await batchUpdateItems(kv, ['A', 'B'], { status: 'success' }, 4);
+  assert.deepEqual(r, { updated: 1, skipped: 1 }, '成功状态只适用于已有译文');
+  await batchUpdateItems(kv, ['B'], { needsTranslation: 'no' }, 5);
+  const b = await getItem(kv, 'B');
+  assert.equal(b.status, STATUS.NO_NEED);
+  assert.equal(b.translation, '');
+  assert.equal((await getTranslationMap(kv, ['B'])).size, 0);
+  await assert.rejects(() =>
+    batchUpdateItems(
+      kv,
+      ['A'],
+      { needsTranslation: 'no', status: 'pending' },
+      6,
+    ),
+  );
+  await assert.rejects(() => batchUpdateItems(kv, ['A'], {}, 6));
+});
+
+test('批量修改递增版本，执行中的旧任务结果不覆盖', async () => {
+  const kv = createMemoryKv();
+  await enqueueTexts(kv, ['A'], 0);
+  const [claimed] = await claimBatch(kv, 10, 100, 1000);
+  await batchUpdateItems(kv, ['A'], { needsTranslation: 'no' }, 20);
+  assert.equal(
+    await commitClaimed(
+      kv,
+      claimed,
+      () => ({ status: STATUS.SUCCESS, translation: '旧' }),
+      30,
+    ),
+    false,
+  );
+  assert.equal((await getItem(kv, 'A')).status, STATUS.NO_NEED);
+});
+
+test('译文没有中文或与原文相同：不保存为成功、不拼接展示', async () => {
+  const ids = new Map([
+    ['1', 'DLTV 4 (1080p)'],
+    ['2', 'News'],
+  ]);
+  const parsed = parseTranslationContent(
+    JSON.stringify({
+      items: [
+        { id: '1', needsTranslation: true, translation: 'DLTV 4 (1080p)' },
+        { id: '2', needsTranslation: true, translation: 'News' },
+      ],
+    }),
+    ids,
+    false,
+    new Set(['2']),
+  );
+  assert.deepEqual(parsed.results.get('1'), { kind: 'no_need' });
+  assert.equal(parsed.results.get('2').kind, 'fail');
+  const kv = createMemoryKv();
+  await enqueueTexts(kv, ['DLTV 4 (1080p)'], 0);
+  await editItem(
+    kv,
+    'DLTV 4 (1080p)',
+    { translation: 'DLTV 4 (1080p)', needsTranslation: 'yes' },
+    1,
+  );
+  assert.equal(
+    (await getTranslationMap(kv, ['DLTV 4 (1080p)'])).size,
+    0,
+    '旧数据中原样返回的译文不展示',
+  );
 });
