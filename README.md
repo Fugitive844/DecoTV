@@ -148,41 +148,20 @@
 快速拉取预构建镜像：
 
 ```bash
-docker pull ghcr.io/decohererk/decotv:latest
+docker pull yangchongshun/deco-tv:latest
 ```
 
 若需在外部主机自行构建后再导入至 OpenWrt，请参考指南中的 “获取或构建镜像” 与 “导出并传输” 步骤。
 
-### 📦 Docker 镜像标签
+### 📦 Docker 镜像
 
-DecoTV 提供以下 Docker 镜像标签：
-
-| 标签     | 说明         | 使用场景                         |
-| -------- | ------------ | -------------------------------- |
-| `latest` | 最新构建版本 | 总是使用最新代码，包含所有小更新 |
-| `v1.0.0` | 特定版本号   | 固定版本部署，便于版本管理和回滚 |
-
-**推荐使用方式**：
+本项目的镜像发布在 Docker Hub：[`yangchongshun/deco-tv`](https://hub.docker.com/r/yangchongshun/deco-tv)，部署时使用 `latest` 标签：
 
 ```bash
-# 方式1：使用 latest 标签（自动获取最新更新）
-docker pull ghcr.io/decohererk/decotv:latest
-
-# 方式2：使用特定版本号（生产环境推荐）
-docker pull ghcr.io/decohererk/decotv:v1.0.0
-
-# 方式3：回滚到旧版本
-docker pull ghcr.io/decohererk/decotv:v0.9.0
+docker pull yangchongshun/deco-tv:latest
 ```
 
-**版本号标签优势**：
-
-- ✅ 清楚知道运行的版本，方便对比 GitHub 最新版
-- ✅ 可以固定版本号，避免意外更新影响生产环境
-- ✅ 支持版本回滚，遇到问题可快速恢复到旧版本
-- ✅ 便于团队协作时统一环境版本
-
-> **注意**：使用 `latest` 标签时，重启容器不会自动拉取新镜像，需要手动执行 `docker pull` 才能获取更新。使用版本号标签可以明确控制何时更新。
+> **注意**：重启容器不会自动拉取新镜像，升级时需要先执行 `docker pull`，再重新创建容器。预构建镜像目前只提供 `linux/amd64` 架构，其他架构（如 ARM）请自行构建。
 
 ### 访问协议与反向代理
 
@@ -205,7 +184,7 @@ DecoTV 会根据请求 URL、`X-Forwarded-Proto`、`X-Forwarded-Host` 或标准 
 ```yml
 services:
   decotv-core:
-    image: ghcr.io/decohererk/decotv:latest # 或使用 :v1.0.0 固定版本
+    image: yangchongshun/deco-tv:latest
     container_name: decotv-core
     restart: on-failure
     ports:
@@ -239,7 +218,7 @@ volumes:
 ```yml
 services:
   decotv-core:
-    image: ghcr.io/decohererk/decotv:latest # 或使用 :v1.0.0 固定版本
+    image: yangchongshun/deco-tv:latest
     container_name: decotv-core
     restart: on-failure
     ports:
@@ -276,7 +255,7 @@ networks:
 ```yml
 services:
   decotv-core:
-    image: ghcr.io/decohererk/decotv:latest # 或使用 :v1.0.0 固定版本
+    image: yangchongshun/deco-tv:latest
     container_name: decotv-core
     restart: on-failure
     ports:
@@ -301,7 +280,7 @@ docker run -d \
   -p 3000:3000 \
   -v decotv-downloads:/app/.cache/ffmpeg-downloads \
   -e PASSWORD=你的管理密码 \
-  ghcr.io/decohererk/decotv:latest
+  yangchongshun/deco-tv:latest
 ```
 
 #### Docker Compose
@@ -309,7 +288,7 @@ docker run -d \
 ```yml
 services:
   decotv:
-    image: ghcr.io/decohererk/decotv:latest
+    image: yangchongshun/deco-tv:latest
     container_name: decotv
     restart: unless-stopped
     ports:
@@ -343,7 +322,7 @@ docker run -d \
   -p 3000:3000 \
   -e NEXT_PUBLIC_AUTH_MODE=public \
   -v decotv-downloads:/app/.cache/ffmpeg-downloads \
-  ghcr.io/decohererk/decotv:latest
+  yangchongshun/deco-tv:latest
 ```
 
 Docker Compose 示例：
@@ -351,7 +330,7 @@ Docker Compose 示例：
 ```yml
 services:
   decotv:
-    image: ghcr.io/decohererk/decotv:latest
+    image: yangchongshun/deco-tv:latest
     container_name: decotv
     restart: unless-stopped
     ports:
@@ -375,7 +354,7 @@ volumes:
 1. **浏览器 Cookie 问题**：尝试清除浏览器 Cookie 后重新登录
 2. **残留数据库配置**：确保没有设置 `REDIS_URL`、`KV_REST_API_URL` 等数据库变量
 3. **反向代理协议头缺失**：如果你通过 Nginx/OpenResty 等反向代理使用 HTTPS，确保正确配置 `X-Forwarded-Proto $scheme`，否则应用可能无法按外部访问协议设置 Cookie
-4. **镜像未更新**：`latest` 镜像重启不会自动拉取新版本，升级前需要先执行 `docker pull ghcr.io/decohererk/decotv:latest`
+4. **镜像未更新**：`latest` 镜像重启不会自动拉取新版本，升级前需要先执行 `docker pull yangchongshun/deco-tv:latest`
 
 **Q: 如何从本地模式迁移到数据库模式？**
 
@@ -667,7 +646,7 @@ VPS Docker 持久化示例：
 ```yml
 services:
   decotv:
-    image: ghcr.io/decohererk/decotv:latest
+    image: yangchongshun/deco-tv:latest
     ports:
       - '3000:3000'
     environment:

@@ -59,7 +59,7 @@ opkg install docker dockerd luci-app-docker
 优先使用预构建镜像（减少在路由器上构建的复杂度）：
 
 ```bash
-docker pull ghcr.io/decohererk/decotv:latest
+docker pull yangchongshun/deco-tv:latest
 ```
 
 如果需要自行构建（在较好的开发机执行）：
@@ -100,7 +100,7 @@ docker run -d \
   --restart unless-stopped \
   -p 3000:3000 \
   -e TZ=Asia/Shanghai \
-  ghcr.io/decohererk/decotv:latest
+  yangchongshun/deco-tv:latest
 ```
 
 增强（持久化 + host 网络）：
@@ -113,7 +113,7 @@ docker run -d \
   --net=host \
   -e TZ=Asia/Shanghai \
   -v /mnt/sda1/decotv/data:/app/data \
-  ghcr.io/decohererk/decotv:latest
+  yangchongshun/deco-tv:latest
 ```
 
 > `--net=host` 可避免部分外部源的端口/DNS 问题，不适合公网暴露。
@@ -141,7 +141,7 @@ curl -I http://<OPENWRT_IP>:3000
 version: '3.8'
 services:
   decotv:
-    image: ghcr.io/decohererk/decotv:latest
+    image: yangchongshun/deco-tv:latest
     container_name: decotv
     restart: unless-stopped
     ports:
@@ -191,7 +191,7 @@ tar czf decotv-data-backup.tgz -C /mnt/sda1/decotv/data .
 ## 性能优化建议
 
 1. 使用 `node:20-alpine` 已较轻量。
-2. 限制资源示例：`docker run -d --name decotv --memory=512m --cpus=1 ... ghcr.io/decohererk/decotv:latest`
+2. 限制资源示例：`docker run -d --name decotv --memory=512m --cpus=1 ... yangchongshun/deco-tv:latest`
 3. 开启 Swap 缓解 OOM。
 4. 定期更新镜像保持安全。
 5. 网络慢时调整 DNS 或使用加速。
