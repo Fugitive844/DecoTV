@@ -3937,7 +3937,8 @@ const SiteConfigComponent = ({
           </button>
         </div>
         <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
-          开启后将过滤标记为成人资源的视频源和包含敏感关键词的内容。关闭后显示所有内容。
+          开启后将过滤标记为成人资源的视频源和包含敏感关键词的内容。关闭后，还需要用户填写有效访问秘钥（或在「独立后台
+          → 访问秘钥」启用空秘钥）才会显示。
         </p>
       </div>
 

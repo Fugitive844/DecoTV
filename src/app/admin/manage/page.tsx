@@ -2,12 +2,22 @@
 
 'use client';
 
-import { ArrowLeft, Bot, Languages, Menu, Tv, Video, X } from 'lucide-react';
+import {
+  ArrowLeft,
+  Bot,
+  KeyRound,
+  Languages,
+  Menu,
+  Tv,
+  Video,
+  X,
+} from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useState } from 'react';
 
 import { AdminConfig } from '@/lib/admin.types';
 
+import AccessKeyPanel from '@/components/admin-manage/AccessKeyPanel';
 import LiveSourceDetail from '@/components/admin-manage/LiveSourceDetail';
 import LlmConfigPanel from '@/components/admin-manage/LlmConfigPanel';
 import {
@@ -17,13 +27,14 @@ import {
 import TranslationPanel from '@/components/admin-manage/TranslationPanel';
 import PageLayout from '@/components/PageLayout';
 
-type Tab = 'llm' | 'video' | 'live' | 'translations';
+type Tab = 'llm' | 'video' | 'live' | 'translations' | 'access-keys';
 
 const MENU: { key: Tab; label: string; icon: React.ReactNode }[] = [
   { key: 'llm', label: '大模型配置', icon: <Bot size={18} /> },
   { key: 'video', label: '视频源管理', icon: <Video size={18} /> },
   { key: 'live', label: '直播源管理', icon: <Tv size={18} /> },
   { key: 'translations', label: '翻译缓存', icon: <Languages size={18} /> },
+  { key: 'access-keys', label: '访问秘钥', icon: <KeyRound size={18} /> },
 ];
 const LOCAL_CONFIG_KEY = 'decotv_admin_config';
 
@@ -183,6 +194,7 @@ function ManagePageClient() {
 
           {tab === 'llm' && <LlmConfigPanel />}
           {tab === 'translations' && <TranslationPanel />}
+          {tab === 'access-keys' && <AccessKeyPanel />}
           {tab === 'video' && (
             <div className='rounded-xl bg-white/80 p-4 shadow-sm dark:bg-gray-800/50 md:p-6'>
               <VideoSourceConfig

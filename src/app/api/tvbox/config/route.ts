@@ -2,6 +2,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
+import { resolveAdultFilter } from '@/lib/adult-filter';
 import { getConfig } from '@/lib/config';
 import { sortLiveSources } from '@/lib/live-source-options';
 import { getEffectiveRequestOrigin } from '@/lib/request-protocol';
@@ -180,10 +181,6 @@ export async function GET(req: NextRequest) {
     const format = searchParams.get('format') || 'json';
     const mode = (searchParams.get('mode') || '').toLowerCase(); // 可选: safe|min|yingshicang
 
-    // 🔒 成人内容过滤参数
-    const filterParam = searchParams.get('filter'); // on|off
-    const adultParam = searchParams.get('adult'); // 0|1
-
     // 🎯 智能搜索代理控制（默认启用）
     const proxyParam = searchParams.get('proxy'); // off 表示禁用代理，直连原始API
     const useSmartProxy = proxyParam !== 'off' && proxyParam !== 'disable'; // 默认启用
@@ -199,8 +196,6 @@ export async function GET(req: NextRequest) {
       format,
       'mode:',
       mode,
-      'filter:',
-      filterParam,
       'proxy:',
       useSmartProxy,
       'minResolution:',
@@ -221,26 +216,12 @@ export async function GET(req: NextRequest) {
       .toLowerCase();
 
     // 🛡️ 纵深防御 Layer 1: 配置接口严格过滤
-    // 确定是否应该过滤成人内容
-    // 核心逻辑：只有显式传入 filter=off 才允许成人内容
-    // 默认情况（无参数）= 严格安全模式
-    let shouldFilterAdult = true; // 默认严格过滤
-
-    // 只有显式传入 filter=off 才关闭过滤
-    if (filterParam === 'off' || filterParam === 'disable') {
-      shouldFilterAdult = false; // 禁用过滤 = 显示成人内容
-      console.log(
-        '[TVBox] ⚠️ Adult filter DISABLED by explicit filter=off parameter',
-      );
-    } else if (adultParam === '1' || adultParam === 'true') {
-      shouldFilterAdult = false; // 显式启用成人内容
-      console.log(
-        '[TVBox] ⚠️ Adult filter DISABLED by explicit adult=1 parameter',
-      );
-    } else {
-      // 其他所有情况（包括无参数）都启用过滤
-      console.log('[TVBox] 🔒 Adult filter ENABLED (strict safe mode)');
-    }
+    // 只有后台总开关关闭过滤、且配置地址带有效访问秘钥 ak 时才放开成人内容；
+    // filter=off、adult=1 等旧参数不再单独生效。
+    const shouldFilterAdult = await resolveAdultFilter(
+      searchParams,
+      cfg.SiteConfig.DisableYellowFilter,
+    );
 
     const forceSpiderRefresh = searchParams.get('forceSpiderRefresh') === '1';
 
@@ -365,6 +346,8 @@ export async function GET(req: NextRequest) {
         const proxySearchParams = new URLSearchParams({
           source: s.key,
           filter: shouldFilterAdult ? 'on' : 'off',
+          // 放开成人内容时把访问秘钥透传给搜索代理，由代理再次校验。
+          ...(shouldFilterAdult ? {} : { ak: searchParams.get('ak') || '' }),
           ...serializedResolutionFilter,
           wd: '',
         });

@@ -13,6 +13,7 @@ import {
 } from 'react';
 import { flushSync } from 'react-dom';
 
+import { withAccessKey } from '@/lib/access-key.client';
 import { GetBangumiCalendarData } from '@/lib/bangumi.client';
 import {
   getDoubanCategories,
@@ -1028,7 +1029,9 @@ function DoubanPageClient() {
           const isExternalUrl =
             originalApiUrl.startsWith('http://') ||
             originalApiUrl.startsWith('https://');
-          const proxyUrl = `/api/proxy/cms?url=${encodeURIComponent(originalApiUrl)}`;
+          const proxyUrl = withAccessKey(
+            `/api/proxy/cms?url=${encodeURIComponent(originalApiUrl)}`,
+          );
           const fetchUrl = isExternalUrl ? proxyUrl : originalApiUrl;
 
           console.log('🔥 [Debug] Using proxy:', isExternalUrl);

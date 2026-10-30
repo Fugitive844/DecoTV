@@ -3,6 +3,10 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
+import {
+  ACCESS_KEY_CHANGED_EVENT,
+  withAccessKey,
+} from '@/lib/access-key.client';
 import { ApiSite } from '@/lib/config';
 import {
   getStoredSourceBrowserValue,
@@ -215,10 +219,12 @@ export function useSourceFilter(
 
     try {
       const [sourceResponse, serverConfigResponse] = await Promise.all([
-        fetch('/api/search/resources', { credentials: 'include' }),
-        fetch('/api/server-config', { credentials: 'include' }).catch(
-          () => null,
-        ),
+        fetch(withAccessKey('/api/search/resources'), {
+          credentials: 'include',
+        }),
+        fetch(withAccessKey('/api/server-config'), {
+          credentials: 'include',
+        }).catch(() => null),
       ]);
 
       if (!sourceResponse.ok) {
@@ -273,7 +279,9 @@ export function useSourceFilter(
         const originalApiUrl = source.api.endsWith('/')
           ? `${source.api}?ac=class`
           : `${source.api}/?ac=class`;
-        const apiUrl = `/api/proxy/cms?url=${encodeURIComponent(originalApiUrl)}`;
+        const apiUrl = withAccessKey(
+          `/api/proxy/cms?url=${encodeURIComponent(originalApiUrl)}`,
+        );
 
         const response = await fetch(apiUrl, {
           headers: {
@@ -346,6 +354,11 @@ export function useSourceFilter(
 
   useEffect(() => {
     void fetchSources();
+    // 设置里修改访问秘钥后重新拉取可用源。
+    const handleKeyChange = () => void fetchSources();
+    window.addEventListener(ACCESS_KEY_CHANGED_EVENT, handleKeyChange);
+    return () =>
+      window.removeEventListener(ACCESS_KEY_CHANGED_EVENT, handleKeyChange);
   }, [fetchSources]);
 
   useEffect(() => {

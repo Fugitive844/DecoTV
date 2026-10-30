@@ -3,6 +3,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { AdminConfig } from '@/lib/admin.types';
+import { resolveAdultFilter } from '@/lib/adult-filter';
 import { getAuthInfoFromCookie, verifyApiAuth } from '@/lib/auth';
 import { toSimplified } from '@/lib/chinese';
 import { getAvailableApiSites, getConfig } from '@/lib/config';
@@ -42,10 +43,15 @@ export async function GET(request: NextRequest) {
     }
 
     // 生成建议
+    const shouldFilterAdult = await resolveAdultFilter(
+      searchParams,
+      config.SiteConfig.DisableYellowFilter,
+    );
     const suggestions = await generateSuggestions(
       config,
       normalizedQuery,
       username,
+      shouldFilterAdult,
     );
 
     // 从配置中获取缓存时间，如果没有配置则使用默认值300秒（5分钟）
@@ -72,6 +78,7 @@ async function generateSuggestions(
   config: AdminConfig,
   query: string,
   username: string,
+  shouldFilterAdult: boolean,
 ): Promise<
   Array<{
     text: string;
@@ -94,7 +101,7 @@ async function generateSuggestions(
         results
           .filter((r: any) => {
             // 成人内容过滤
-            if (!config.SiteConfig.DisableYellowFilter) {
+            if (shouldFilterAdult) {
               if (firstSite.is_adult) return false;
               const typeName = r.type_name || '';
               if (yellowWords.some((word: string) => typeName.includes(word)))

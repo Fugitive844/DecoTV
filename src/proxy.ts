@@ -7,7 +7,6 @@ import { isPublicAdminAllowed, isPublicMode } from '@/lib/auth-mode';
 
 export async function proxy(request: NextRequest) {
   let pathname = request.nextUrl.pathname;
-  let contentMode: string | null = null;
 
   const rewriteUrl = request.nextUrl.clone();
   let shouldRewrite = false;
@@ -18,10 +17,9 @@ export async function proxy(request: NextRequest) {
       /^\/q(360|480|720|1080|1440|2160)(\/.*)$/i,
     );
 
+    // 旧的 /adult/ 前缀只做路径兼容，不再放开成人内容（需访问秘钥 ak）。
     if (pathname.startsWith('/adult/')) {
       pathname = pathname.replace('/adult/', '/');
-      rewriteUrl.searchParams.set('adult', '1');
-      contentMode = 'adult';
       shouldRewrite = true;
       continue;
     }
@@ -43,14 +41,11 @@ export async function proxy(request: NextRequest) {
     break;
   }
 
-  // 处理成人内容和质量过滤路径重写。
-  // 例如 /adult/quality/720/api/search -> /api/search?adult=1&minResolution=720
+  // 处理质量过滤路径重写。
+  // 例如 /quality/720/api/search -> /api/search?minResolution=720
   if (shouldRewrite) {
     rewriteUrl.pathname = pathname;
     const response = NextResponse.rewrite(rewriteUrl);
-    if (contentMode) {
-      response.headers.set('X-Content-Mode', contentMode);
-    }
 
     // 如果是 API 请求，继续处理认证
     if (pathname.startsWith('/api')) {
@@ -258,6 +253,7 @@ function shouldSkipAuth(pathname: string): boolean {
     '/api/proxy/m3u8-filter',
     '/api/proxy/m3u8-asset',
     '/register', // 允许访问注册页面
+    '/api/access-key/verify', // 登录页校验访问秘钥
   ];
 
   // 本地模式 (无数据库) 下，允许跳过 admin API 鉴权

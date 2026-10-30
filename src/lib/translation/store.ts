@@ -2,7 +2,6 @@
 import { db } from '@/lib/db';
 import type { LiveChannelCacheRecord } from '@/lib/live-cache.types';
 
-import { createSharedTranslationFile } from './shared-file.mjs';
 import { enqueueTexts, getTranslationMap } from './store-core.mjs';
 import { collectCandidateTexts } from './text-filter.mjs';
 import { createTranslationWorker } from './worker.mjs';
@@ -18,18 +17,8 @@ export function isTranslationBackgroundSupported(): boolean {
 }
 
 const globalTranslation = globalThis as typeof globalThis & {
-  __decotvSharedTranslationFile?: ReturnType<
-    typeof createSharedTranslationFile
-  >;
   __decotvTranslationWorker?: ReturnType<typeof createTranslationWorker>;
 };
-
-export function getSharedTranslationFile() {
-  return (globalTranslation.__decotvSharedTranslationFile ??=
-    createSharedTranslationFile({
-      dir: process.env.TRANSLATION_SHARED_DIR || '',
-    }));
-}
 
 async function httpPost(
   url: string,
@@ -51,7 +40,6 @@ export function getTranslationWorker() {
   return (globalTranslation.__decotvTranslationWorker ??=
     createTranslationWorker({
       kv: translationKv,
-      sharedFile: getSharedTranslationFile(),
       httpPost,
       // 日志不输出密钥或响应正文。
       log: (message, error) =>

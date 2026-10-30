@@ -4,6 +4,12 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
 
+import {
+  ACCESS_KEY_HINT,
+  getAccessKey,
+  setAccessKey,
+  verifyAccessKey,
+} from '@/lib/access-key.client';
 import { getSafeRedirectPath } from '@/lib/safe-redirect';
 import { CURRENT_VERSION } from '@/lib/version';
 import {
@@ -167,6 +173,7 @@ function LoginPageClient() {
   const searchParams = useSearchParams();
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState('');
+  const [accessKey, setAccessKeyInput] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [shouldAskUsername, setShouldAskUsername] = useState(false);
@@ -181,6 +188,7 @@ function LoginPageClient() {
 
   // 在客户端挂载后设置配置
   useEffect(() => {
+    setAccessKeyInput(getAccessKey());
     // 从服务端获取配置
     fetch('/api/server-config')
       .then((res) => res.json())
@@ -216,6 +224,12 @@ function LoginPageClient() {
 
     try {
       setLoading(true);
+      // 访问秘钥选填：填写了就先校验，无效时提示且不登录。
+      const key = accessKey.trim();
+      if (key && !(await verifyAccessKey(key))) {
+        setError('秘钥无效，请检查或留空');
+        return;
+      }
       const res = await fetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -226,6 +240,7 @@ function LoginPageClient() {
       });
 
       if (res.ok) {
+        setAccessKey(key);
         const redirect = getSafeRedirectPath(searchParams.get('redirect'));
         router.replace(redirect);
       } else if (res.status === 401) {
@@ -335,6 +350,26 @@ function LoginPageClient() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
               />
+            </div>
+
+            <div>
+              <label htmlFor='access-key' className='sr-only'>
+                访问秘钥
+              </label>
+              <input
+                id='access-key'
+                type='text'
+                autoComplete='off'
+                spellCheck={false}
+                className='block w-full rounded-lg border-0 py-3 px-4 text-gray-900 dark:text-gray-100 shadow-sm ring-1 ring-white/60 dark:ring-white/20 placeholder:text-gray-500 dark:placeholder:text-gray-400 focus:ring-2 focus:ring-purple-500 focus:outline-none sm:text-base bg-white/60 dark:bg-zinc-800/60 backdrop-blur transition-all duration-300 hover:ring-purple-400 focus:shadow-lg focus:shadow-purple-500/25 login-input'
+                placeholder='访问秘钥（选填）'
+                value={accessKey}
+                onChange={(e) => setAccessKeyInput(e.target.value)}
+              />
+              <p className='mt-2 text-xs text-gray-600 dark:text-gray-400'>
+                {ACCESS_KEY_HINT}
+                ；不填也可以登录后在右上角用户菜单「访问秘钥」中填写
+              </p>
             </div>
 
             {error && (

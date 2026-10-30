@@ -2,6 +2,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
+import { resolveAdultFilter } from '@/lib/adult-filter';
 import { getAuthInfoFromCookie } from '@/lib/auth';
 import { getConfig } from '@/lib/config';
 import { CURRENT_VERSION } from '@/lib/version';
@@ -21,24 +22,12 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const config = await getConfig();
 
-  // 检测成人内容模式
-  const adultParam = searchParams.get('adult');
-  const filterParam = searchParams.get('filter');
-  const contentMode = request.headers.get('X-Content-Mode');
   const resolutionFilter = buildResolutionFilterFromSearchParams(searchParams);
-
-  let adultFilterEnabled = !config.SiteConfig.DisableYellowFilter;
-
-  // URL参数或路径模式覆盖全局配置
-  if (adultParam === '1' || adultParam === 'true' || contentMode === 'adult') {
-    adultFilterEnabled = false;
-  } else if (adultParam === '0' || adultParam === 'false') {
-    adultFilterEnabled = true;
-  } else if (filterParam === 'off' || filterParam === 'disable') {
-    adultFilterEnabled = false;
-  } else if (filterParam === 'on' || filterParam === 'enable') {
-    adultFilterEnabled = true;
-  }
+  // 总开关关闭过滤且 URL 带有效访问秘钥 ak 时才不过滤。
+  const adultFilterEnabled = await resolveAdultFilter(
+    searchParams,
+    config.SiteConfig.DisableYellowFilter,
+  );
 
   return NextResponse.json(
     {

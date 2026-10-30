@@ -8,7 +8,9 @@ import {
   ChevronDown,
   Download,
   ExternalLink,
+  Key,
   KeyRound,
+  LayoutDashboard,
   LogOut,
   Settings,
   Shield,
@@ -26,6 +28,7 @@ import { checkForUpdates, UpdateStatus } from '@/lib/version_check';
 import { useBangumiSubscription } from '@/contexts/BangumiSubscriptionContext';
 import { useDownloadManager } from '@/contexts/DownloadManagerContext';
 
+import AccessKeyDialog from './AccessKeyDialog';
 import { VersionPanel } from './VersionPanel';
 
 interface AuthInfo {
@@ -39,6 +42,7 @@ export const UserMenu: React.FC = () => {
   const { openManager: openBangumiManager } = useBangumiSubscription();
   const [isOpen, setIsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isAccessKeyOpen, setIsAccessKeyOpen] = useState(false);
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const [isVersionPanelOpen, setIsVersionPanelOpen] = useState(false);
   const [authInfo, setAuthInfo] = useState<AuthInfo | null>(null);
@@ -341,6 +345,15 @@ export const UserMenu: React.FC = () => {
 
   const handleAdminPanel = () => {
     router.push('/admin');
+  };
+
+  const handleManageCenter = () => {
+    router.push('/admin/manage');
+  };
+
+  const handleAccessKey = () => {
+    setIsOpen(false);
+    setIsAccessKeyOpen(true);
   };
 
   const handleDownloadManager = () => {
@@ -684,6 +697,15 @@ export const UserMenu: React.FC = () => {
             <span className='font-medium'>追番缓存</span>
           </button>
 
+          {/* 访问秘钥快捷入口 */}
+          <button
+            onClick={handleAccessKey}
+            className='w-full px-3 py-2 text-left flex items-center gap-2.5 text-slate-700 dark:text-gray-300 hover:bg-slate-100 dark:hover:bg-gray-800 transition-colors text-sm'
+          >
+            <Key className='w-4 h-4 text-slate-500 dark:text-gray-400' />
+            <span className='font-medium'>访问秘钥</span>
+          </button>
+
           {/* 管理面板按钮 */}
           {showAdminPanel && (
             <button
@@ -692,6 +714,17 @@ export const UserMenu: React.FC = () => {
             >
               <Shield className='w-4 h-4 text-slate-500 dark:text-gray-400' />
               <span className='font-medium'>管理面板</span>
+            </button>
+          )}
+
+          {/* 管理中心快捷入口：大模型、视频源、直播源、翻译缓存、访问秘钥 */}
+          {showAdminPanel && (
+            <button
+              onClick={handleManageCenter}
+              className='w-full px-3 py-2 text-left flex items-center gap-2.5 text-slate-700 dark:text-gray-300 hover:bg-slate-100 dark:hover:bg-gray-800 transition-colors text-sm'
+            >
+              <LayoutDashboard className='w-4 h-4 text-slate-500 dark:text-gray-400' />
+              <span className='font-medium'>管理中心</span>
             </button>
           )}
 
@@ -1439,6 +1472,11 @@ export const UserMenu: React.FC = () => {
       {isChangePasswordOpen &&
         mounted &&
         createPortal(changePasswordPanel, document.body)}
+
+      <AccessKeyDialog
+        isOpen={isAccessKeyOpen && mounted}
+        onClose={() => setIsAccessKeyOpen(false)}
+      />
 
       {/* 版本面板 */}
       <VersionPanel

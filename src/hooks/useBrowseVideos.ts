@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { withAccessKey } from '@/lib/access-key.client';
+
 export interface BrowseVideoItem {
   vod_id?: string | number;
   vod_name?: string;
@@ -228,7 +230,9 @@ export default function useBrowseVideos({
           normalizedCategoryId,
           targetPage,
         );
-        const proxyUrl = `/api/proxy/cms?url=${encodeURIComponent(originalApiUrl)}`;
+        const proxyUrl = withAccessKey(
+          `/api/proxy/cms?url=${encodeURIComponent(originalApiUrl)}`,
+        );
         const response = await fetch(proxyUrl, {
           cache: 'no-store',
           signal: controller.signal,

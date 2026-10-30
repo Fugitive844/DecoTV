@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
     const config = await getAvailableApiSites(username);
     const globalConfig = await getConfig();
 
-    const shouldFilterAdult = resolveAdultFilter(
+    const shouldFilterAdult = await resolveAdultFilter(
       searchParams,
       globalConfig.SiteConfig.DisableYellowFilter,
     );

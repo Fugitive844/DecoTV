@@ -10,7 +10,6 @@ import { getConfig } from '@/lib/config';
 import { peekLiveChannels } from '@/lib/live';
 import {
   collectChannelTexts,
-  getSharedTranslationFile,
   getTranslationWorker,
   isTranslationBackgroundSupported,
   translationKv as kv,
@@ -33,15 +32,13 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
 
   if (searchParams.get('view') === 'status') {
-    const [worker, shared, activeId] = await Promise.all([
+    const [worker, activeId] = await Promise.all([
       getWorkerState(kv),
-      getSharedTranslationFile().status(),
       getActiveLlmId(kv),
     ]);
     return jsonNoStore({
       backgroundSupported: isTranslationBackgroundSupported(),
       worker,
-      shared,
       activeId,
     });
   }
@@ -107,13 +104,6 @@ export async function POST(request: NextRequest) {
           { translation: body.translation, needsTranslation },
           now,
         );
-        await getSharedTranslationFile().append([
-          {
-            text: item.text,
-            translation: item.translation,
-            needsTranslation: item.status === 'success',
-          },
-        ]);
         return jsonNoStore({ ok: true, item });
       }
       case 'rekey': {

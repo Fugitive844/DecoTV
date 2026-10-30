@@ -66,10 +66,6 @@ const okModel = (items) => ({
   ),
 });
 
-function noShared() {
-  return { lookup: async () => new Map(), append: async () => true };
-}
-
 async function setupWorker(kv, httpPost, options = {}) {
   await saveLlmConfig(
     kv,
@@ -90,7 +86,6 @@ async function setupWorker(kv, httpPost, options = {}) {
   const worker = createTranslationWorker({
     kv,
     httpPost,
-    sharedFile: options.sharedFile || noShared(),
     now: () => clock,
     sleep: async () => {},
     contentRetryDelayMs: 120_000,
@@ -487,42 +482,6 @@ test('人工单行翻译：额度 0 也可发、不扣额、不重试；失败�
   assert.equal(stats.autoCalls, 0);
 });
 
-test('共享文件命中直接导入，不调用模型、不扣额度', async () => {
-  const kv = createMemoryKv();
-  const model = fakeModel(okModel);
-  const appended = [];
-  const sharedFile = {
-    lookup: async (texts) =>
-      new Map(
-        texts
-          .filter((t) => t === 'News')
-          .map((t) => [t, { translation: '共享新闻', needsTranslation: true }]),
-      ),
-    append: async (entries) => {
-      appended.push(...entries);
-      return true;
-    },
-  };
-  const { worker } = await setupWorker(kv, model.httpPost, {
-    quota: 0,
-    sharedFile,
-  });
-  await enqueueTexts(kv, ['News'], 0);
-  await worker.runRound();
-  const item = await getItem(kv, 'News');
-  assert.equal(item.translation, '共享新闻');
-  assert.equal(item.resultSource, 'shared');
-  assert.equal(model.calls.length, 0);
-  await setQuota(kv, 'c1', -1);
-  await enqueueTexts(kv, ['Sports'], 0);
-  await worker.runRound();
-  assert.deepEqual(
-    appended.map((e) => e.text),
-    ['Sports'],
-    '模型结果写入共享文件',
-  );
-});
-
 test('模型成功但写库失败：重试落库，不重新请求模型', async () => {
   const kv = createMemoryKv();
   const model = fakeModel(okModel);
@@ -540,7 +499,6 @@ test('模型成功但写库失败：重试落库，不重新请求模型', async
       }
       return result;
     },
-    sharedFile: noShared(),
     sleep: async () => {},
   });
   void worker;

@@ -36,7 +36,6 @@ interface StatusResponse {
   worker: {
     lastRoundAt?: number;
     lastClaimed?: number;
-    lastSharedHits?: number;
     lastSucceeded?: number;
     lastFailed?: number;
     lastStop?: string;
@@ -44,7 +43,6 @@ interface StatusResponse {
     sleepingUntil?: number;
     lastProtocolErrors?: string[];
   };
-  shared: { enabled: boolean; dir: string; entries: number; lastError: string };
 }
 
 const API = '/api/admin/manage/translations';
@@ -77,7 +75,7 @@ const BATCH_STATUS_LABEL: Record<string, string> = {
 const SOURCE_LABEL: Record<string, string> = {
   model: '模型',
   manual: '人工',
-  shared: '共享文件',
+  shared: '共享文件（旧）',
   '': '—',
 };
 
@@ -268,22 +266,10 @@ export default function TranslationPanel() {
             </span>
             <span>
               上一轮：{formatTime(s.worker.lastRoundAt)}，取{' '}
-              {s.worker.lastClaimed ?? 0} 条，共享命中{' '}
-              {s.worker.lastSharedHits ?? 0}，成功 {s.worker.lastSucceeded ?? 0}
+              {s.worker.lastClaimed ?? 0} 条，成功 {s.worker.lastSucceeded ?? 0}
               ，失败 {s.worker.lastFailed ?? 0}
             </span>
             <span>下次扫描：{formatTime(s.worker.sleepingUntil)}</span>
-            <span>
-              共享文件：
-              {s.shared.enabled
-                ? `${s.shared.dir}（${s.shared.entries} 条）`
-                : '未配置 TRANSLATION_SHARED_DIR'}
-            </span>
-            {s.shared.lastError && (
-              <span className='text-red-600'>
-                共享文件错误：{s.shared.lastError}
-              </span>
-            )}
             {s.worker.lastStop && (
               <span className='text-amber-600 md:col-span-2'>
                 最近中止（{formatTime(s.worker.lastStopAt)}）：

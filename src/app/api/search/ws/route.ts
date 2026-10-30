@@ -2,6 +2,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
+import { resolveAdultFilter } from '@/lib/adult-filter';
 import { getAuthInfoFromCookie, verifyApiAuth } from '@/lib/auth';
 import { toSimplified } from '@/lib/chinese';
 import { getAvailableApiSites, getConfig } from '@/lib/config';
@@ -44,6 +45,11 @@ export async function GET(request: NextRequest) {
 
   const config = await getConfig();
   const apiSites = await getAvailableApiSites(username);
+  // 总开关关闭过滤且 URL 带有效访问秘钥 ak 时才放开成人内容。
+  const shouldFilterAdult = await resolveAdultFilter(
+    searchParams,
+    config.SiteConfig.DisableYellowFilter,
+  );
 
   // 将搜索关键词规范化为简体中文
   let normalizedQuery = query;
@@ -144,7 +150,7 @@ export async function GET(request: NextRequest) {
 
           // 成人内容过滤
           let filteredResults: any[] = results;
-          if (!config.SiteConfig.DisableYellowFilter) {
+          if (shouldFilterAdult) {
             filteredResults = (results ?? []).filter((result: any) => {
               if (!result) return false;
               const typeName = result.type_name || '';

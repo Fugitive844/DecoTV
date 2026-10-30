@@ -143,7 +143,7 @@ export async function GET(request: NextRequest) {
 
   try {
     config = await getConfig();
-    shouldFilterAdult = resolveAdultFilter(
+    shouldFilterAdult = await resolveAdultFilter(
       searchParams,
       config.SiteConfig.DisableYellowFilter,
     );
@@ -152,14 +152,7 @@ export async function GET(request: NextRequest) {
       '[CMS Proxy] ⚠️ Failed to read config, fallback to safe mode:',
       err,
     );
-    const adultParam = searchParams.get('adult');
-    const filterParam = searchParams.get('filter');
-    shouldFilterAdult = !(
-      adultParam === '1' ||
-      adultParam === 'true' ||
-      filterParam === 'off' ||
-      filterParam === 'disable'
-    );
+    shouldFilterAdult = true;
   }
 
   if (shouldFilterAdult && config) {

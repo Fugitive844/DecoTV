@@ -41,7 +41,6 @@ export class TranslationDbWriteError extends Error {}
 /**
  * @param {{
  *   kv: import('./store-core.mjs').Kv,
- *   sharedFile: { lookup(texts: string[]): Promise<Map<string, { translation: string, needsTranslation: boolean }>>, append(entries: { text: string, translation: string, needsTranslation: boolean }[]): Promise<boolean> },
  *   httpPost: (url: string, headers: Record<string, string>, body: string, timeoutMs: number) => Promise<{ status: number, text: string }>,
  *   now?: () => number,
  *   sleep?: (ms: number, signal?: { wake: Promise<void> }) => Promise<void>,
@@ -189,7 +188,7 @@ export function createTranslationWorker(deps) {
     );
   };
 
-  /** @param {import('./store-core.mjs').TranslationItem} item @param {{ kind: string, translation?: string, error?: string }} result @param {'model' | 'shared'} source */
+  /** @param {import('./store-core.mjs').TranslationItem} item @param {{ kind: string, translation?: string, error?: string }} result @param {'model'} source */
   const resultPatch = (item, result, source, at) => {
     if (result.kind === 'success')
       return () => ({
@@ -262,29 +261,6 @@ export function createTranslationWorker(deps) {
       else remaining.push(item);
     }
 
-    // 共享文件命中直接导入，不消耗模型额度。
-    const hits = await deps.sharedFile.lookup(
-      remaining.map((item) => item.text),
-    );
-    let sharedHits = 0;
-    for (const item of remaining) {
-      const hit = hits.get(item.text);
-      if (!hit) continue;
-      const result = hit.needsTranslation
-        ? { kind: 'success', translation: hit.translation }
-        : { kind: 'no_need' };
-      await commitWithRetry(() =>
-        commitClaimed(
-          kv,
-          item,
-          resultPatch(item, result, 'shared', now()),
-          now(),
-        ),
-      );
-      sharedHits++;
-    }
-    remaining = remaining.filter((item) => !hits.has(item.text));
-
     // 再次核对：已被人工修改或其他任务完成的记录不发送。
     const fresh = [];
     for (const item of remaining) {
@@ -296,7 +272,6 @@ export function createTranslationWorker(deps) {
       await setWorkerState(kv, {
         lastRoundAt: startedAt,
         lastClaimed: claimed.length,
-        lastSharedHits: sharedHits,
       });
       return { claimed: claimed.length, aborted: false };
     }
@@ -308,7 +283,6 @@ export function createTranslationWorker(deps) {
       await setWorkerState(kv, {
         lastRoundAt: startedAt,
         lastClaimed: claimed.length,
-        lastSharedHits: sharedHits,
         lastStop: '未启用模型配置或缺少 API Key，待处理记录保留',
         lastStopAt: now(),
       });
@@ -329,7 +303,6 @@ export function createTranslationWorker(deps) {
         await setWorkerState(kv, {
           lastRoundAt: startedAt,
           lastClaimed: claimed.length,
-          lastSharedHits: sharedHits,
           lastStop: `配置「${config.name}」自动调用额度不足`,
           lastStopAt: now(),
         });
@@ -352,7 +325,6 @@ export function createTranslationWorker(deps) {
         await setWorkerState(kv, {
           lastRoundAt: startedAt,
           lastClaimed: claimed.length,
-          lastSharedHits: sharedHits,
           lastStop: `模型接口连续失败，本轮停止：${error.message}`,
           lastStopAt: now(),
         });
@@ -361,8 +333,6 @@ export function createTranslationWorker(deps) {
     }
 
     const finishedAt = now();
-    /** @type {{ text: string, translation: string, needsTranslation: boolean }[]} */
-    const shared = [];
     let succeeded = 0;
     let failed = 0;
     for (let index = 0; index < remaining.length; index++) {
@@ -371,7 +341,7 @@ export function createTranslationWorker(deps) {
         kind: 'fail',
         error: '模型漏项',
       };
-      const committed = await commitWithRetry(() =>
+      await commitWithRetry(() =>
         commitClaimed(
           kv,
           item,
@@ -380,21 +350,11 @@ export function createTranslationWorker(deps) {
         ),
       );
       if (result.kind === 'fail') failed++;
-      else {
-        succeeded++;
-        if (committed)
-          shared.push({
-            text: item.text,
-            translation: result.kind === 'success' ? result.translation : '',
-            needsTranslation: result.kind === 'success',
-          });
-      }
+      else succeeded++;
     }
-    if (shared.length > 0) await deps.sharedFile.append(shared);
     await setWorkerState(kv, {
       lastRoundAt: startedAt,
       lastClaimed: claimed.length,
-      lastSharedHits: sharedHits,
       lastSucceeded: succeeded,
       lastFailed: failed,
       lastProtocolErrors: (outcome?.protocolErrors || []).slice(0, 5),
@@ -545,13 +505,6 @@ export function createTranslationWorker(deps) {
               }
             : undefined,
         );
-        await deps.sharedFile.append([
-          {
-            text,
-            translation: result.kind === 'success' ? result.translation : '',
-            needsTranslation: result.kind === 'success',
-          },
-        ]);
         return updated;
       } finally {
         manualInFlight.delete(text);

@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { withAccessKey } from '@/lib/access-key.client';
+
 interface SearchSuggestionsProps {
   query: string;
   isVisible: boolean;
@@ -42,7 +44,9 @@ export default function SearchSuggestions({
 
     try {
       const response = await fetch(
-        `/api/search/suggestions?q=${encodeURIComponent(searchQuery)}`,
+        withAccessKey(
+          `/api/search/suggestions?q=${encodeURIComponent(searchQuery)}`,
+        ),
         {
           signal: controller.signal,
         },

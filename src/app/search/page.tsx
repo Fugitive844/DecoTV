@@ -13,6 +13,7 @@ import React, {
   useState,
 } from 'react';
 
+import { withAccessKey } from '@/lib/access-key.client';
 import {
   addSearchHistory,
   clearSearchHistory,
@@ -960,7 +961,7 @@ function SearchPageClient() {
     ): Promise<boolean> => {
       try {
         const response = await fetch(
-          '/api/search?q=' + encodeURIComponent(trimmed),
+          withAccessKey('/api/search?q=' + encodeURIComponent(trimmed)),
         );
         if (!response.ok) {
           throw new Error(
@@ -1016,7 +1017,7 @@ function SearchPageClient() {
     if (currentFluidSearch) {
       try {
         const es = new EventSource(
-          '/api/search/ws?q=' + encodeURIComponent(trimmed),
+          withAccessKey('/api/search/ws?q=' + encodeURIComponent(trimmed)),
         );
         eventSourceRef.current = es;
 
@@ -1114,7 +1115,7 @@ function SearchPageClient() {
       const fetchSearchResults = async () => {
         try {
           const response = await fetch(
-            '/api/search?q=' + encodeURIComponent(trimmed),
+            withAccessKey('/api/search?q=' + encodeURIComponent(trimmed)),
           );
           if (!response.ok) {
             throw new Error(

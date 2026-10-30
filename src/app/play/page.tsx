@@ -18,6 +18,7 @@ import {
   useState,
 } from 'react';
 
+import { withAccessKey } from '@/lib/access-key.client';
 import { createBangumiSubscriptionId } from '@/lib/bangumi-subscription';
 import {
   deleteFavorite,
@@ -3043,7 +3044,7 @@ function PlayPageClient() {
       // 根据搜索词获取全部源信息
       try {
         const response = await fetch(
-          `/api/search?q=${encodeURIComponent(query.trim())}`,
+          withAccessKey(`/api/search?q=${encodeURIComponent(query.trim())}`),
         );
         if (!response.ok) {
           throw new Error('搜索失败');

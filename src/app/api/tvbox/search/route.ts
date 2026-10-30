@@ -2,6 +2,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
+import { resolveAdultFilter } from '@/lib/adult-filter';
 import { getConfig } from '@/lib/config';
 import { getDetailFromApi, searchFromApi } from '@/lib/downstream';
 import { rankSearchResults } from '@/lib/search-ranking';
@@ -128,8 +129,6 @@ export async function GET(request: NextRequest) {
       'keyword',
       'searchword',
     ]);
-    const filterRaw = searchParams.get('filter');
-    const filterParam = (filterRaw ?? 'on').toLowerCase();
     const strictMode = searchParams.get('strict') === '1';
     const resolutionFilter =
       buildResolutionFilterFromSearchParams(searchParams);
@@ -155,10 +154,11 @@ export async function GET(request: NextRequest) {
         s.name.trim().toLowerCase(),
       ),
     );
-    const siteDefaultFilter = true; // 站点默认开启成人过滤
-    const shouldFilter =
-      ['on', 'enable', '1', 'true', 'yes'].includes(filterParam) ||
-      (filterRaw == null && siteDefaultFilter);
+    // 总开关关闭过滤且 URL 带有效访问秘钥 ak 时才放开成人内容。
+    const shouldFilter = await resolveAdultFilter(
+      searchParams,
+      config.SiteConfig.DisableYellowFilter,
+    );
     const isOrion = isOrionClient(request);
 
     // 查找视频源配置
@@ -258,7 +258,7 @@ export async function GET(request: NextRequest) {
     }
 
     console.log(
-      `[TVBox Search Proxy] source=${sourceKey}, query="${query}", filter=${filterParam}, strict=${strictMode}, client=${
+      `[TVBox Search Proxy] source=${sourceKey}, query="${query}", filter=${shouldFilter ? 'on' : 'off'}, strict=${strictMode}, client=${
         isOrion ? 'orion' : 'generic'
       }`,
     );

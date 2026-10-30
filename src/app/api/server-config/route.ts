@@ -2,6 +2,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
+import { resolveAdultFilter } from '@/lib/adult-filter';
 import { normalizeApkDownloadUrl } from '@/lib/apk-download';
 import { getAuthMode, isPublicAdminAllowed } from '@/lib/auth-mode';
 import { getConfig } from '@/lib/config';
@@ -19,23 +20,12 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const config = await getConfig();
 
-  // 检查是否通过URL参数控制成人内容过滤
-  const adultParam = searchParams.get('adult');
-  const filterParam = searchParams.get('filter');
   const resolutionFilter = buildResolutionFilterFromSearchParams(searchParams);
-
-  let adultFilterEnabled = !config.SiteConfig.DisableYellowFilter;
-
-  // URL参数覆盖全局配置
-  if (adultParam === '1' || adultParam === 'true') {
-    adultFilterEnabled = false;
-  } else if (adultParam === '0' || adultParam === 'false') {
-    adultFilterEnabled = true;
-  } else if (filterParam === 'off' || filterParam === 'disable') {
-    adultFilterEnabled = false;
-  } else if (filterParam === 'on' || filterParam === 'enable') {
-    adultFilterEnabled = true;
-  }
+  // 总开关关闭过滤且 URL 带有效访问秘钥 ak 时才不过滤；字段名保持不变（APK 依赖）。
+  const adultFilterEnabled = await resolveAdultFilter(
+    searchParams,
+    config.SiteConfig.DisableYellowFilter,
+  );
 
   const result = {
     ApkDownloadUrl:
@@ -66,7 +56,7 @@ export async function GET(request: NextRequest) {
     // 提供说明信息
     AdultFilterInfo: {
       enabled: adultFilterEnabled,
-      source: adultParam || filterParam ? 'url_param' : 'global_config',
+      source: searchParams.get('ak') ? 'access_key' : 'global_config',
       message: adultFilterEnabled
         ? '成人内容过滤已启用（家庭安全模式）'
         : '成人内容过滤已禁用（完整内容模式）',

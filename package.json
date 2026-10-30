@@ -26,10 +26,11 @@
     "docker:run": "docker run -p 3000:3000 decotv",
     "test:live-schedule": "node --test scripts/test-live-schedule.mjs",
     "test:source-merge": "node --test scripts/test-source-merge.mjs",
-    "test:translation": "node --test scripts/test-translation.mjs scripts/test-shared-file.mjs",
-    "test:backend": "node --test scripts/test-live-cache.mjs scripts/test-live-schedule.mjs scripts/test-source-merge.mjs scripts/test-translation.mjs scripts/test-shared-file.mjs",
+    "test:translation": "node --test scripts/test-translation.mjs",
+    "test:backend": "node --test scripts/test-live-cache.mjs scripts/test-live-schedule.mjs scripts/test-source-merge.mjs scripts/test-translation.mjs scripts/test-access-key.mjs",
     "mock:llm": "node scripts/mock-llm-server.mjs",
-    "test:kvrocks": "node --test scripts/test-storage-kvrocks.mjs"
+    "test:kvrocks": "node --test scripts/test-storage-kvrocks.mjs",
+    "test:access-key": "node --test scripts/test-access-key.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

@@ -2,6 +2,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
+import { resolveAdultFilter } from '@/lib/adult-filter';
 import { getConfig } from '@/lib/config';
 import {
   fetchDoubanJson,
@@ -376,14 +377,6 @@ function toPlayableVod(result: SearchResult) {
   };
 }
 
-function shouldFilterAdult(searchParams: URLSearchParams): boolean {
-  const filter = searchParams.get('filter')?.toLowerCase();
-  const adult = searchParams.get('adult')?.toLowerCase();
-  if (filter === 'off' || filter === 'disable') return false;
-  if (adult === '1' || adult === 'true') return false;
-  return true;
-}
-
 async function searchPlayableSources(
   request: NextRequest,
   query: string,
@@ -391,7 +384,10 @@ async function searchPlayableSources(
 ): Promise<SearchResult[]> {
   const config = await getConfig();
   const { searchParams } = new URL(request.url);
-  const filterAdult = shouldFilterAdult(searchParams);
+  const filterAdult = await resolveAdultFilter(
+    searchParams,
+    config.SiteConfig.DisableYellowFilter,
+  );
   const sourceLimit = Math.max(
     1,
     Number(process.env.TVBOX_DOUBAN_SOURCE_LIMIT || '18') || 18,
