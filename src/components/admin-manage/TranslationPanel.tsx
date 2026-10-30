@@ -1,7 +1,7 @@
 'use client';
 
 import { Languages, RefreshCw, X } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { buttonStyles } from './admin-shared';
@@ -14,21 +14,11 @@ import {
   SearchBox,
   useJson,
 } from './manage-ui';
+import TranslationDialog, { TranslationItem } from './TranslationDialog';
 
-interface Item {
-  text: string;
-  translation: string;
-  needsTranslation: 'unknown' | 'yes' | 'no';
-  status: string;
-  failCount: number;
-  lastError: string;
-  nextAttemptAt: number;
-  resultSource: string;
-  updatedAt: number;
-}
 interface ListResponse {
   total: number;
-  items: Item[];
+  items: TranslationItem[];
   counts: Record<string, number>;
 }
 interface StatusResponse {
@@ -89,7 +79,7 @@ const SOURCE_LABEL: Record<string, string> = {
   '': '—',
 };
 
-function getErrorMessage(item: Item) {
+function getErrorMessage(item: TranslationItem) {
   if (item.status === 'failed')
     return `已停止自动重试（累计失败 ${item.failCount} 次）`;
   return item.lastError || '—';
@@ -105,9 +95,35 @@ export default function TranslationPanel() {
     `${API}?q=${encodeURIComponent(q)}&status=${status}&needs=${needs}&page=${page}&pageSize=${pageSize}`,
   );
   const state = useJson<StatusResponse>(`${API}?view=status`);
-  const [editing, setEditing] = useState<Item | null>(null);
+  const [editing, setEditing] = useState<TranslationItem | null>(null);
   const [form, setForm] = useState({ text: '', translation: '', needs: 'yes' });
   const [busyRow, setBusyRow] = useState('');
+  const [translating, setTranslating] = useState<{
+    label: string;
+    body?: Record<string, unknown>;
+  } | null>(null);
+  const { setData } = list;
+  const updateRow = useCallback(
+    (item: TranslationItem, oldText = item.text) => {
+      setData((previous) => {
+        if (!previous) return previous;
+        const old = previous.items.find((row) => row.text === oldText);
+        const counts = { ...previous.counts };
+        if (old && old.status !== item.status) {
+          counts[old.status] = Math.max(0, (counts[old.status] || 0) - 1);
+          counts[item.status] = (counts[item.status] || 0) + 1;
+        }
+        return {
+          ...previous,
+          counts,
+          items: previous.items.map((row) =>
+            row.text === oldText ? item : row,
+          ),
+        };
+      });
+    },
+    [setData],
+  );
   const [message, setMessage] = useState<{
     kind: 'error' | 'success' | 'info';
     text: string;
@@ -125,17 +141,7 @@ export default function TranslationPanel() {
     if (savedPrompt !== undefined) setPrompt(savedPrompt);
   }, [savedPrompt]);
 
-  const reloadList = list.reload;
-  const reloadState = state.reload;
   const manualPending = !!state.data?.manualTask;
-  useEffect(() => {
-    if (!manualPending) return;
-    const timer = setInterval(() => {
-      reloadList();
-      reloadState();
-    }, 3000);
-    return () => clearInterval(timer);
-  }, [manualPending, reloadList, reloadState]);
 
   useEffect(() => setPage(1), [q, status, needs, pageSize]);
   useEffect(() => {
@@ -195,20 +201,18 @@ export default function TranslationPanel() {
     }
   };
 
-  const translateSelection = async () => {
-    const ok = await act(
-      {
+  const translateSelection = () => {
+    setTranslating({
+      label: `所选 ${selectedCount} 条记录`,
+      body: {
         action: 'translate_batch',
         ...(allFiltered
           ? { filter: { q, status, needs } }
           : { texts: Array.from(selected) }),
       },
-      '已提交 {total} 条手动翻译，每批最多 100 条，不受自动额度限制',
-    );
-    if (ok) {
-      setSelected(new Set());
-      setAllFiltered(false);
-    }
+    });
+    setSelected(new Set());
+    setAllFiltered(false);
   };
 
   const act = async (
@@ -228,8 +232,34 @@ export default function TranslationPanel() {
           .replace('{total}', String(data.total ?? 0))
           .replace('{skipped}', String(data.skipped ?? 0)),
       });
-      list.reload();
-      state.reload();
+      if (data.item)
+        updateRow(
+          data.item,
+          typeof body.text === 'string' ? body.text : undefined,
+        );
+      if (
+        body.action === 'set_automatic' &&
+        typeof data.automaticEnabled === 'boolean'
+      ) {
+        state.setData((previous) =>
+          previous
+            ? { ...previous, automaticEnabled: data.automaticEnabled }
+            : previous,
+        );
+      }
+      if (body.action === 'set_prompt') {
+        state.setData((previous) =>
+          previous
+            ? {
+                ...previous,
+                systemPrompt:
+                  body.useDefault === true
+                    ? previous.defaultSystemPrompt
+                    : String(body.prompt || '').trim(),
+              }
+            : previous,
+        );
+      }
       return true;
     } catch (error) {
       setMessage({
@@ -283,12 +313,27 @@ export default function TranslationPanel() {
           </div>
           <div className='flex flex-wrap gap-2'>
             <button
-              disabled={!!busyRow}
+              disabled={
+                list.loading ||
+                state.loading ||
+                !!busyRow ||
+                translating !== null
+              }
+              className={`${buttonStyles.secondarySmall} inline-flex items-center gap-1`}
+              onClick={() => {
+                list.reload();
+                state.reload();
+              }}
+            >
+              <RefreshCw size={14} /> 刷新数据
+            </button>
+            <button
+              disabled={!!busyRow || translating !== null}
               className={`${buttonStyles.primarySmall} inline-flex items-center gap-1`}
               onClick={() =>
                 act(
                   { action: 'collect_history' },
-                  '已扫描现有频道缓存，新增 {created} 条待翻译原文',
+                  '已扫描现有频道缓存，新增 {created} 条待翻译原文，点击刷新数据查看',
                 )
               }
               title='扫描已有频道缓存，补入缺失的原文'
@@ -296,14 +341,19 @@ export default function TranslationPanel() {
               <Languages size={14} /> 收集历史原文
             </button>
             <button
-              disabled={!!busyRow || manualPending || !s?.backgroundSupported}
+              disabled={
+                !!busyRow ||
+                translating !== null ||
+                manualPending ||
+                !s?.backgroundSupported
+              }
               className={`${buttonStyles.secondarySmall} inline-flex items-center gap-1`}
-              title='手动处理下一批待翻译记录，最多 100 条，不检查或扣减自动额度，不自动重试'
+              title='手动处理下一批待翻译记录，实时查看模型交互，不扣自动额度'
               onClick={() =>
-                act(
-                  { action: 'run_now' },
-                  '已提交手动翻译一轮，最多 100 条，不扣自动额度',
-                )
+                setTranslating({
+                  label: '下一批待翻译记录',
+                  body: { action: 'run_now' },
+                })
               }
             >
               <RefreshCw size={14} /> 手动执行一轮
@@ -389,8 +439,11 @@ export default function TranslationPanel() {
         </label>
       </div>
 
-      {message && <Notice kind={message.kind}>{message.text}</Notice>}
+      <p className='text-xs text-gray-500'>
+        页面不自动刷新；单条翻译会更新当前行，批量结果与后台状态请点击「刷新数据」查看。
+      </p>
       {state.error && <Notice kind='error'>{state.error}</Notice>}
+      {message && <Notice kind={message.kind}>{message.text}</Notice>}
 
       <details className='rounded-xl bg-white/80 p-4 shadow-sm dark:bg-gray-800/50'>
         <summary className='cursor-pointer text-sm font-medium text-gray-800 dark:text-gray-200'>
@@ -640,26 +693,20 @@ export default function TranslationPanel() {
                         编辑
                       </button>
                       <button
-                        disabled={!!busyRow}
+                        disabled={!!busyRow || translating !== null}
                         className={
                           busyRow === item.text
                             ? buttonStyles.disabledSmall
                             : buttonStyles.successSmall
                         }
                         title='使用当前启用模型翻译一次，不受自动额度限制，不自动重试'
-                        onClick={() =>
-                          act(
-                            { action: 'translate_once', text: item.text },
-                            `「${item.text}」手动翻译完成`,
-                            item.text,
-                          )
-                        }
+                        onClick={() => setTranslating({ label: item.text })}
                       >
-                        {busyRow === item.text ? '翻译中…' : '翻译一次'}
+                        翻译一次
                       </button>
                       {(item.failCount > 0 || item.status === 'failed') && (
                         <button
-                          disabled={!!busyRow}
+                          disabled={!!busyRow || translating !== null}
                           className={buttonStyles.warningSmall}
                           title='清零失败次数并重新排队，仍受自动额度和批量规则限制'
                           onClick={() =>
@@ -695,6 +742,15 @@ export default function TranslationPanel() {
           />
         )}
       </div>
+
+      {translating !== null && (
+        <TranslationDialog
+          text={translating.label}
+          body={translating.body}
+          onComplete={updateRow}
+          onClose={() => setTranslating(null)}
+        />
+      )}
 
       {editing &&
         createPortal(

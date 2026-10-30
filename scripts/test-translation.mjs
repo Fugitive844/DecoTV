@@ -949,3 +949,119 @@ test('手动任务中途退出后，新的进程从已完成批次后恢复', as
   assert.equal(await getManualTranslationJob(kv), null);
   assert.equal((await getWorkerState(kv)).lastManualCompleted, 205);
 });
+
+test('手动流式翻译传递进度、单次调用、保存并保持自动额度为零', async () => {
+  const kv = createMemoryKv();
+  await enqueueTexts(kv, ['News'], 1);
+  const events = [];
+  let calls = 0;
+  const { worker } = await setupWorker(
+    kv,
+    async () => {
+      throw new Error('不应走非流式接口');
+    },
+    {
+      quota: 0,
+      workerOptions: {
+        httpPostStream: async (_url, _headers, body, _timeout, onEvent) => {
+          calls++;
+          assert.equal(JSON.parse(body).stream, true);
+          onEvent({ type: 'reasoning', delta: '识别频道' });
+          onEvent({ type: 'content', delta: '回复片段' });
+          return {
+            content: JSON.stringify({
+              items: [{ id: '1', needsTranslation: true, translation: '新闻' }],
+            }),
+            truncated: false,
+          };
+        },
+      },
+    },
+  );
+  const result = await worker.translateOnce('News', {
+    onEvent: (event) => events.push(event),
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.translation, '新闻');
+  assert.equal((await getItem(kv, 'News')).translation, '新闻');
+  assert.equal(await getQuota(kv, 'c1'), 0);
+  assert.ok(events.find((event) => event.type === 'request'));
+  assert.ok(events.find((event) => event.type === 'reasoning'));
+  assert.ok(!JSON.stringify(events).includes('sk-fake'));
+});
+
+test('流式失败不重试、不覆盖原译文，并隐藏接口错误中的密钥', async () => {
+  const kv = createMemoryKv();
+  await enqueueTexts(kv, ['News'], 1);
+  await editItem(
+    kv,
+    'News',
+    { translation: '原有译文', needsTranslation: 'yes' },
+    2,
+  );
+  let calls = 0;
+  const { worker } = await setupWorker(
+    kv,
+    async () => {
+      throw new Error('不应调用');
+    },
+    {
+      workerOptions: {
+        httpPostStream: async () => {
+          calls++;
+          throw new Error('bad sk-fake');
+        },
+      },
+    },
+  );
+  await assert.rejects(
+    worker.translateOnce('News', { onEvent() {} }),
+    /bad \[已隐藏\]/,
+  );
+  assert.equal(calls, 1);
+  assert.equal((await getItem(kv, 'News')).translation, '原有译文');
+  assert.ok(!(await getItem(kv, 'News')).lastError.includes('sk-fake'));
+});
+
+test('排队期间取消的手动翻译不会发出模型请求', async () => {
+  const kv = createMemoryKv();
+  await enqueueTexts(kv, ['News', 'Sports'], 1);
+  let release;
+  const wait = new Promise((resolve) => {
+    release = resolve;
+  });
+  let calls = 0;
+  const { worker } = await setupWorker(
+    kv,
+    async () => {
+      throw new Error('不应调用');
+    },
+    {
+      workerOptions: {
+        httpPostStream: async () => {
+          calls++;
+          await wait;
+          return {
+            content: JSON.stringify({
+              items: [{ id: '1', needsTranslation: false, translation: '' }],
+            }),
+            truncated: false,
+          };
+        },
+      },
+    },
+  );
+  const first = worker.translateOnce('News', { onEvent() {} });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const abort = new AbortController();
+  const second = worker.translateOnce('Sports', {
+    onEvent() {},
+    signal: abort.signal,
+  });
+  const rejected = assert.rejects(second);
+  abort.abort();
+  release();
+  await first;
+  await rejected;
+  assert.equal(calls, 1);
+});

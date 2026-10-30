@@ -63,7 +63,7 @@ export function isThinkingEnabled(config) {
  * @param {{ baseUrl: string, model: string, thinking?: boolean, systemPrompt?: string | null }} config
  * @param {{ id: string, text: string }[]} items
  */
-export function buildTranslationRequestBody(config, items) {
+export function buildTranslationRequestBody(config, items, options = {}) {
   /** @type {Record<string, unknown>} */
   const body = {
     model: config.model,
@@ -81,7 +81,7 @@ export function buildTranslationRequestBody(config, items) {
       },
     ],
     response_format: { type: 'json_object' },
-    stream: false,
+    stream: options.stream ?? false,
   };
   const thinking = isThinkingEnabled(config);
   if (thinking) {

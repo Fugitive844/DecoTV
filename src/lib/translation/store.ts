@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import type { LiveChannelCacheRecord } from '@/lib/live-cache.types';
 
 import { enqueueTexts, getTranslationMap } from './store-core.mjs';
+import { postStreamingCompletion } from './stream-transport.mjs';
 import { collectCandidateTexts } from './text-filter.mjs';
 import { createTranslationWorker } from './worker.mjs';
 
@@ -41,6 +42,7 @@ export function getTranslationWorker() {
     createTranslationWorker({
       kv: translationKv,
       httpPost,
+      httpPostStream: postStreamingCompletion,
       // 日志不输出密钥或响应正文。
       log: (message, error) =>
         console.warn(

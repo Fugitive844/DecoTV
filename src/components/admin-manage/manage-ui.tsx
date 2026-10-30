@@ -41,7 +41,7 @@ export function useJson<T>(url: string | null) {
     };
   }, [url, token]);
   const reload = useCallback(() => setToken((value) => value + 1), []);
-  return { data, error, loading, reload };
+  return { data, error, loading, reload, setData };
 }
 
 export async function postJson(url: string, body: Record<string, unknown>) {

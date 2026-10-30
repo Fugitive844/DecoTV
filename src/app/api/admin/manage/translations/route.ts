@@ -8,6 +8,7 @@ import {
 } from '@/lib/admin-auth';
 import { getConfig } from '@/lib/config';
 import { peekLiveChannels } from '@/lib/live';
+import { manualProgressKey } from '@/lib/translation/manual-progress.mjs';
 import { SYSTEM_PROMPT } from '@/lib/translation/protocol.mjs';
 import {
   collectChannelTexts,
@@ -136,6 +137,7 @@ export async function POST(request: NextRequest) {
         return jsonNoStore({ ok: true, item });
       }
       case 'translate_once': {
+        if (body.stream === true) return streamManualTranslation(request, text);
         const item = await getTranslationWorker().translateOnce(text);
         return jsonNoStore({ ok: true, item });
       }
@@ -184,7 +186,9 @@ export async function POST(request: NextRequest) {
       case 'run_now': {
         if (!isTranslationBackgroundSupported())
           throw new Error('无数据库模式，不支持后台手动翻译');
-        await getTranslationWorker().requestManualTranslation();
+        const job = await getTranslationWorker().requestManualTranslation();
+        if (body.stream === true)
+          return streamQueuedTranslation(request, job.id);
         return jsonNoStore({ ok: true, queued: true });
       }
       case 'set_automatic': {
@@ -216,6 +220,8 @@ export async function POST(request: NextRequest) {
           ).map((item) => item.text);
         const job =
           await getTranslationWorker().requestManualTranslation(texts);
+        if (body.stream === true)
+          return streamQueuedTranslation(request, job.id);
         return jsonNoStore({
           ok: true,
           queued: true,
@@ -231,4 +237,145 @@ export async function POST(request: NextRequest) {
       { status: 400 },
     );
   }
+}
+
+// POST + SSE avoids putting source text in a URL; the existing admin check runs first.
+function streamManualTranslation(request: NextRequest, text: string) {
+  const abort = new AbortController();
+  const disconnect = () => abort.abort();
+  request.signal.addEventListener('abort', disconnect, { once: true });
+  if (request.signal.aborted) disconnect();
+  let closed = false;
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const send = (event: unknown) => {
+        if (closed || abort.signal.aborted) return;
+        try {
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify(event)}\n\n`),
+          );
+        } catch {
+          closed = true;
+          disconnect();
+        }
+      };
+      const heartbeat = setInterval(() => send({ type: 'ping' }), 15_000);
+      try {
+        send({ type: 'status', message: '后端已收到手动翻译请求' });
+        const item = await getTranslationWorker().translateOnce(text, {
+          onEvent: send,
+          signal: abort.signal,
+        });
+        send({ type: 'complete', item, message: '翻译完成，结果已保存' });
+      } catch (error) {
+        send({
+          type: 'error',
+          message: error instanceof Error ? error.message : '手动翻译失败',
+        });
+      } finally {
+        clearInterval(heartbeat);
+        request.signal.removeEventListener('abort', disconnect);
+        if (!closed) {
+          closed = true;
+          controller.close();
+        }
+      }
+    },
+    cancel() {
+      closed = true;
+      disconnect();
+    },
+  });
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-store, no-transform',
+      'X-Accel-Buffering': 'no',
+    },
+  });
+}
+
+// The browser receives SSE only; journal polling stays on the server and never reloads the cache table.
+function streamQueuedTranslation(request: NextRequest, id: string) {
+  let closed = false;
+  let cursor = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let close: () => void = () => {};
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      close = () => {
+        if (closed) return;
+        closed = true;
+        clearTimeout(timer);
+        request.signal.removeEventListener('abort', close);
+        try {
+          controller.close();
+        } catch {
+          /* response was already cancelled */
+        }
+      };
+      request.signal.addEventListener('abort', close, { once: true });
+      const send = (event: unknown) => {
+        if (closed) return;
+        try {
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify(event)}\n\n`),
+          );
+        } catch {
+          close();
+        }
+      };
+      send({ type: 'status', message: '手动任务已入队，等待后台串行处理…' });
+      let ticks = 0;
+      const poll = async () => {
+        if (closed) return;
+        try {
+          const raw = await kv.kvGet(manualProgressKey(id));
+          const snapshot = raw ? JSON.parse(raw) : null;
+          for (const entry of snapshot?.events || []) {
+            if (closed || entry.seq <= cursor) continue;
+            cursor = entry.seq;
+            send(entry.event);
+            if (
+              entry.event.type === 'complete' ||
+              entry.event.type === 'error'
+            ) {
+              close();
+              return;
+            }
+          }
+          if (++ticks % 40 === 0) send({ type: 'ping' });
+          if (ticks > 2400) {
+            send({
+              type: 'error',
+              message: '进度连接已超时，后台任务仍继续，请手动刷新确认',
+            });
+            close();
+            return;
+          }
+          if (!closed) timer = setTimeout(() => void poll(), 300);
+        } catch {
+          send({
+            type: 'error',
+            message: '读取任务进度失败，请手动刷新确认后台结果',
+          });
+          close();
+        }
+      };
+      if (request.signal.aborted) close();
+      else void poll();
+    },
+    cancel() {
+      close();
+    },
+  });
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-store, no-transform',
+      'X-Accel-Buffering': 'no',
+    },
+  });
 }

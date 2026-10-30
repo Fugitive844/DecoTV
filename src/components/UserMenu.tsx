@@ -344,7 +344,7 @@ export const UserMenu: React.FC = () => {
   };
 
   const handleAdminPanel = () => {
-    router.push('/admin');
+    router.push('/admin/manage');
   };
 
   const handleManageCenter = () => {
@@ -595,7 +595,7 @@ export const UserMenu: React.FC = () => {
     }
   };
 
-  // 检查是否显示管理面板按钮
+  // 检查是否显示管理中心按钮
   const showAdminPanel =
     authMode === 'public'
       ? publicAllowAdmin
@@ -706,14 +706,14 @@ export const UserMenu: React.FC = () => {
             <span className='font-medium'>访问秘钥</span>
           </button>
 
-          {/* 管理面板按钮 */}
+          {/* 管理中心按钮 */}
           {showAdminPanel && (
             <button
               onClick={handleAdminPanel}
               className='w-full px-3 py-2 text-left flex items-center gap-2.5 text-slate-700 dark:text-gray-300 hover:bg-slate-100 dark:hover:bg-gray-800 transition-colors text-sm'
             >
               <Shield className='w-4 h-4 text-slate-500 dark:text-gray-400' />
-              <span className='font-medium'>管理面板</span>
+              <span className='font-medium'>管理中心</span>
             </button>
           )}
 

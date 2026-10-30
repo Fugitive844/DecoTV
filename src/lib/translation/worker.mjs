@@ -3,6 +3,7 @@
  * 每轮最多认领 100 条；满 100 条立即继续，不足 100 条（含 0 条）或本轮中止后休眠 2 分钟。
  */
 import process from 'node:process';
+import { createManualProgress } from './manual-progress.mjs';
 import {
   clearInterval,
   clearTimeout,
@@ -27,6 +28,7 @@ import {
   getItem,
   getLlmConfig,
   getManualTranslationJob,
+  getWorkerState,
   getTranslationPrompt,
   isAutomaticTranslationEnabled,
   MAX_FAIL_COUNT,
@@ -46,6 +48,7 @@ export class TranslationDbWriteError extends Error {}
  * @param {{
  *   kv: import('./store-core.mjs').Kv,
  *   httpPost: (url: string, headers: Record<string, string>, body: string, timeoutMs: number) => Promise<{ status: number, text: string }>,
+ *   httpPostStream?: (url: string, headers: Record<string, string>, body: string, timeoutMs: number, onEvent: (event: any) => void, signal?: AbortSignal) => Promise<{ content: string, truncated: boolean }>,
  *   now?: () => number,
  *   sleep?: (ms: number, signal?: { wake: Promise<void> }) => Promise<void>,
  *   newRequestId?: () => string,
@@ -124,13 +127,59 @@ export function createTranslationWorker(deps) {
     return run;
   };
 
-  /** @param {{ baseUrl: string, model: string, apiKey: string }} config @param {{ id: string, text: string }[]} items */
-  const callModel = async (config, items) => {
+  /** @param {{ baseUrl: string, model: string, apiKey: string }} config @param {{ id: string, text: string }[]} items @param {{ onEvent?: (event: any) => void, signal?: AbortSignal }} [options] */
+  const callModel = async (config, items, options = {}) => {
     const url = buildChatCompletionsUrl(config.baseUrl);
     const systemPrompt = await getTranslationPrompt(kv);
-    const body = JSON.stringify(
-      buildTranslationRequestBody({ ...config, systemPrompt }, items),
+    const streaming = !!options.onEvent && !!deps.httpPostStream;
+    const requestBody = buildTranslationRequestBody(
+      { ...config, systemPrompt },
+      items,
+      {
+        stream: streaming,
+        thinking: !!options.onEvent,
+      },
     );
+    const body = JSON.stringify(requestBody);
+    options.signal?.throwIfAborted();
+    options.onEvent?.({
+      type: 'request',
+      model: config.model,
+      messages: requestBody.messages,
+    });
+    const headers = {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${config.apiKey}`,
+    };
+    if (streaming) {
+      try {
+        const outer = await deps.httpPostStream(
+          url,
+          headers,
+          body,
+          Math.max(requestTimeoutMs, 180_000),
+          options.onEvent,
+          options.signal,
+        );
+        return parseTranslationContent(
+          outer.content,
+          new Map(items.map((item) => [item.id, item.text])),
+          outer.truncated,
+          new Set(
+            items.filter((item) => item.mustTranslate).map((item) => item.id),
+          ),
+        );
+      } catch (error) {
+        throw new TranslationTransportError(
+          options.signal?.aborted
+            ? '手动翻译已取消'
+            : String(error?.message || '模型流式请求失败').replaceAll(
+                config.apiKey,
+                '[已隐藏]',
+              ),
+        );
+      }
+    }
     let response;
     try {
       response = await deps.httpPost(
@@ -226,7 +275,7 @@ export function createTranslationWorker(deps) {
    * 执行一轮：返回认领数量与是否中止（无配置、额度不足、接口故障）。
    * @returns {Promise<{ claimed: number, aborted: boolean, reason?: string, succeeded?: number, failed?: number }>}
    */
-  const runRound = async ({ manual = false } = {}) => {
+  const runRound = async ({ manual = false, onEvent, signal } = {}) => {
     if (!manual && !(await isAutomaticTranslationEnabled(kv)))
       return { claimed: 0, aborted: true, reason: 'disabled' };
     const startedAt = now();
@@ -326,7 +375,9 @@ export function createTranslationWorker(deps) {
         return { claimed: claimed.length, aborted: true, reason: 'quota' };
       }
       try {
-        outcome = await exclusive(() => callModel(config, requestItems));
+        outcome = await exclusive(() =>
+          callModel(config, requestItems, { onEvent, signal }),
+        );
         await recordCall(config.id, { kind: callKind });
         break;
       } catch (error) {
@@ -400,7 +451,7 @@ export function createTranslationWorker(deps) {
   const manualInFlight = new Set();
 
   /** 手动选中项允许重新翻译终态；失败保留原结果，不自动重试。 */
-  const translateSelectedBatch = async (texts) => {
+  const translateSelectedBatch = async (texts, options = {}) => {
     const items = (
       await Promise.all(texts.map((text) => getItem(kv, text)))
     ).filter(Boolean);
@@ -421,6 +472,7 @@ export function createTranslationWorker(deps) {
             text: item.text,
             mustTranslate: item.needsTranslation === 'yes',
           })),
+          options,
         ),
       );
       await recordCall(config.id, { kind: 'manual' });
@@ -459,10 +511,10 @@ export function createTranslationWorker(deps) {
   };
 
   /** 每次只执行手动任务的一批，下一批仍由同一个持锁工作循环处理。 */
-  const runManualJob = async (job) => {
+  const runManualJobInner = async (job, onEvent) => {
     await setWorkerState(kv, { sleepingUntil: 0, lastManualError: '' });
     if (job.texts === null) {
-      const result = await runRound({ manual: true });
+      const result = await runRound({ manual: true, onEvent });
       await setWorkerState(kv, {
         lastManualTotal: result.claimed,
         lastManualCompleted: result.aborted ? 0 : result.claimed,
@@ -477,7 +529,7 @@ export function createTranslationWorker(deps) {
       return result;
     }
     const texts = job.texts.slice(job.completed, job.completed + batchSize);
-    const result = await translateSelectedBatch(texts);
+    const result = await translateSelectedBatch(texts, { onEvent });
     const next = {
       ...job,
       completed: job.completed + texts.length,
@@ -499,6 +551,36 @@ export function createTranslationWorker(deps) {
       done ? null : JSON.stringify(next),
     );
     return { claimed: texts.length, aborted: result.aborted };
+  };
+
+  const runManualJob = async (job) => {
+    const progress = await createManualProgress(kv, job.id);
+    progress.emit({
+      type: 'status',
+      message: `后台正在处理第 ${Math.floor(job.completed / batchSize) + 1} 批（每批最多 ${batchSize} 条）`,
+    });
+    try {
+      const result = await runManualJobInner(job, progress.emit);
+      const state = await getWorkerState(kv);
+      const summary = `已处理 ${state.lastManualCompleted || 0} / ${state.lastManualTotal || 0} 条，成功 ${state.lastManualSucceeded || 0}，失败 ${state.lastManualFailed || 0}`;
+      if (result.aborted)
+        progress.emit({
+          type: 'error',
+          message: state.lastManualError || '手动翻译已中止',
+        });
+      else if (!(await getManualTranslationJob(kv)))
+        progress.emit({ type: 'complete', message: summary });
+      else progress.emit({ type: 'status', message: summary });
+      return result;
+    } catch (error) {
+      progress.emit({
+        type: 'error',
+        message: error?.message || '手动翻译失败',
+      });
+      throw error;
+    } finally {
+      await progress.flush();
+    }
   };
 
   const wake = () => {
@@ -600,8 +682,10 @@ export function createTranslationWorker(deps) {
     /**
      * 任意行手动翻译一次：绕过且不扣自动额度，只发 1 次 HTTP，不自动重试。
      * @param {string} text
+     * @param {{ onEvent?: (event: any) => void, signal?: AbortSignal }} [options]
      */
-    async translateOnce(text) {
+    async translateOnce(text, options = {}) {
+      options.signal?.throwIfAborted();
       if (manualInFlight.has(text)) throw new Error('该行正在手动翻译，请稍候');
       const item = await getItem(kv, text);
       if (!item) throw new Error('翻译记录不存在');
@@ -609,14 +693,27 @@ export function createTranslationWorker(deps) {
       const config = activeId ? await getLlmConfig(kv, activeId) : null;
       if (!config || !config.apiKey)
         throw new Error('没有启用的模型配置，请先在「大模型配置」中启用');
+      if (manualInFlight.has(text)) throw new Error('该行正在手动翻译，请稍候');
       manualInFlight.add(text);
       try {
+        options.onEvent?.({
+          type: 'status',
+          message: '已排队，等待当前模型请求结束…',
+        });
         let outcome;
         try {
           outcome = await exclusive(() =>
-            callModel(config, [
-              { id: '1', text, mustTranslate: item.needsTranslation === 'yes' },
-            ]),
+            callModel(
+              config,
+              [
+                {
+                  id: '1',
+                  text,
+                  mustTranslate: item.needsTranslation === 'yes',
+                },
+              ],
+              options,
+            ),
           );
           await recordCall(config.id, { kind: 'manual' });
         } catch (error) {
@@ -650,6 +747,10 @@ export function createTranslationWorker(deps) {
           );
           throw new Error(`手动翻译失败：${result.error}`);
         }
+        options.onEvent?.({
+          type: 'status',
+          message: '模型回复校验通过，正在保存译文…',
+        });
         const at = now();
         const { item: updated } = await updateItem(kv, text, (current) =>
           current
@@ -668,6 +769,7 @@ export function createTranslationWorker(deps) {
               }
             : undefined,
         );
+        if (!updated) throw new Error('翻译记录已被移除，结果未保存');
         return updated;
       } finally {
         manualInFlight.delete(text);

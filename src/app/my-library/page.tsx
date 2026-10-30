@@ -977,7 +977,7 @@ export default function MyLibraryPage() {
                 清空筛选
               </button>
               <Link
-                href='/admin'
+                href='/admin/manage?tab=private-library'
                 className='rounded-xl border border-slate-200/90 bg-white/85 px-4 py-2 text-sm text-slate-700 transition-colors hover:border-emerald-300/70 hover:bg-emerald-50/90 hover:text-emerald-700 dark:border-white/10 dark:bg-slate-900/70 dark:text-slate-200 dark:hover:border-emerald-300/30 dark:hover:bg-slate-800/70 dark:hover:text-emerald-200'
               >
                 前往后台配置

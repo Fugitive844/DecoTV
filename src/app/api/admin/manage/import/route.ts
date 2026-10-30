@@ -22,7 +22,10 @@ export async function POST(request: NextRequest) {
   if (!auth.ok) return auth.response;
   if (auth.isLocalMode)
     return jsonNoStore(
-      { error: '无数据库模式不支持服务端导入，请使用原管理面板' },
+      {
+        error:
+          '无数据库模式不支持服务端导入，请在管理中心的视频源或直播源菜单中导入',
+      },
       { status: 400 },
     );
   try {
