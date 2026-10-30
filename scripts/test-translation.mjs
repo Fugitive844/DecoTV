@@ -6,6 +6,7 @@ import {
   buildTranslationRequestBody,
   parseChatCompletionResponse,
   parseTranslationContent,
+  SYSTEM_PROMPT,
   TranslationTransportError,
 } from '../src/lib/translation/protocol.mjs';
 import {
@@ -15,16 +16,23 @@ import {
   editItem,
   enqueueTexts,
   getItem,
+  getManualTranslationJob,
+  getTranslationPrompt,
   getTranslationMap,
+  getWorkerState,
+  isAutomaticTranslationEnabled,
   rekeyItem,
   batchUpdateItems,
   resetItem,
   saveLlmConfig,
   setActiveLlmId,
+  setAutomaticTranslationEnabled,
   setQuota,
+  setTranslationPrompt,
   getQuota,
   getLlmStats,
   STATUS,
+  STORE_KEYS,
 } from '../src/lib/translation/store-core.mjs';
 import {
   restoreTechnicalTags,
@@ -82,6 +90,7 @@ async function setupWorker(kv, httpPost, options = {}) {
   );
   await setActiveLlmId(kv, 'c1');
   await setQuota(kv, 'c1', options.quota ?? -1);
+  await setAutomaticTranslationEnabled(kv, options.automaticEnabled ?? true);
   let clock = options.clock ?? 1_000_000;
   const worker = createTranslationWorker({
     kv,
@@ -652,4 +661,291 @@ test('译文没有中文或与原文相同：不保存为成功、不拼接展�
     0,
     '旧数据中原样返回的译文不展示',
   );
+});
+
+test('自动开关默认关闭、持久化；关闭后仍可入库但不调用模型', async () => {
+  const kv = createMemoryKv();
+  assert.equal(await isAutomaticTranslationEnabled(kv), false);
+  const model = fakeModel(okModel);
+  const { worker } = await setupWorker(kv, model.httpPost, {
+    automaticEnabled: false,
+    workerOptions: { sleep: async () => worker.stop() },
+  });
+  await enqueueTexts(kv, ['News'], 0);
+  await worker.start();
+  assert.equal((await getItem(kv, 'News')).status, STATUS.PENDING);
+  assert.equal(model.calls.length, 0);
+  assert.equal((await worker.runRound()).reason, 'disabled');
+  await setAutomaticTranslationEnabled(kv, true);
+  const restarted = createTranslationWorker({ kv, httpPost: model.httpPost });
+  await restarted.runRound();
+  assert.equal(model.calls.length, 1);
+  assert.equal((await getItem(kv, 'News')).status, STATUS.SUCCESS);
+});
+
+test('手动一轮：跨实例入队，自动关闭且额度 0 时只执行一批，不扣额', async () => {
+  const kv = createMemoryKv();
+  const model = fakeModel(okModel);
+  const { worker } = await setupWorker(kv, model.httpPost, {
+    quota: 0,
+    automaticEnabled: false,
+    workerOptions: { sleep: async () => worker.stop() },
+  });
+  const texts = Array.from({ length: 150 }, (_, i) => `Channel ${i}`);
+  await enqueueTexts(kv, texts, 0);
+  const apiWorker = createTranslationWorker({ kv, httpPost: model.httpPost });
+  await apiWorker.requestManualTranslation();
+  await worker.start();
+  assert.deepEqual(
+    model.calls.map((call) => call.items.length),
+    [100],
+  );
+  assert.equal(await getQuota(kv, 'c1'), 0);
+  assert.equal((await getLlmStats(kv, 'c1')).manualCalls, 1);
+  assert.equal((await getLlmStats(kv, 'c1')).autoCalls, 0);
+  assert.equal(await getManualTranslationJob(kv), null);
+  assert.equal((await getWorkerState(kv)).lastManualCompleted, 100);
+  assert.equal((await worker.runRound()).reason, 'disabled');
+});
+
+test('手动批量：仅执行所选 205 条，分为 100/100/5，额度不扣且不放行自动任务', async () => {
+  const kv = createMemoryKv();
+  const model = fakeModel(okModel);
+  const { worker } = await setupWorker(kv, model.httpPost, {
+    quota: 7,
+    automaticEnabled: false,
+    workerOptions: { sleep: async () => worker.stop() },
+  });
+  const selected = Array.from({ length: 205 }, (_, i) => `Selected ${i}`);
+  await enqueueTexts(kv, [...selected, 'Unselected'], 0);
+  await worker.requestManualTranslation([...selected, selected[0]]);
+  await assert.rejects(
+    () => worker.requestManualTranslation(['Unselected']),
+    /已有手动翻译任务/,
+  );
+  await worker.start();
+  assert.deepEqual(
+    model.calls.map((call) => call.items.length),
+    [100, 100, 5],
+  );
+  assert.deepEqual(
+    new Set(model.calls.flatMap((call) => call.items.map((item) => item.text))),
+    new Set(selected),
+  );
+  assert.equal((await getItem(kv, 'Unselected')).status, STATUS.PENDING);
+  assert.equal((await getItem(kv, selected[204])).status, STATUS.SUCCESS);
+  assert.equal(await getQuota(kv, 'c1'), 7);
+  assert.equal((await getLlmStats(kv, 'c1')).manualCalls, 3);
+  assert.equal((await getWorkerState(kv)).lastManualCompleted, 205);
+});
+
+test('手动批量可翻译无需翻译和失败终态，失败保留旧结果且不重复调用', async () => {
+  const kv = createMemoryKv();
+  const model = fakeModel(() => ({ status: 503, text: '{}' }));
+  const { worker } = await setupWorker(kv, model.httpPost, {
+    quota: 0,
+    automaticEnabled: false,
+    workerOptions: { sleep: async () => worker.stop() },
+  });
+  await enqueueTexts(kv, ['News', 'CNN', 'Bad'], 0);
+  await editItem(
+    kv,
+    'News',
+    { translation: '新闻', needsTranslation: 'yes' },
+    1,
+  );
+  await editItem(kv, 'CNN', { translation: '', needsTranslation: 'no' }, 1);
+  await batchUpdateItems(kv, ['Bad'], { status: STATUS.FAILED }, 1);
+  await worker.requestManualTranslation(['News', 'CNN', 'Bad']);
+  await worker.start();
+  assert.equal(model.calls.length, 1);
+  assert.equal((await getItem(kv, 'News')).translation, '新闻');
+  assert.equal((await getItem(kv, 'CNN')).status, STATUS.NO_NEED);
+  assert.equal((await getItem(kv, 'Bad')).failCount, 3);
+  assert.match((await getItem(kv, 'Bad')).lastError, /手动翻译失败/);
+  assert.equal(await getManualTranslationJob(kv), null);
+  assert.equal(await getQuota(kv, 'c1'), 0);
+});
+
+test('手动批量接口故障停止后续批次，不在下一次扫描重发', async () => {
+  const kv = createMemoryKv();
+  const model = fakeModel(() => ({ status: 503, text: '{}' }));
+  const { worker } = await setupWorker(kv, model.httpPost, {
+    quota: 0,
+    automaticEnabled: false,
+    workerOptions: { sleep: async () => worker.stop() },
+  });
+  const texts = Array.from({ length: 150 }, (_, i) => `Channel ${i}`);
+  await enqueueTexts(kv, texts, 0);
+  await worker.requestManualTranslation(texts);
+  await worker.start();
+  assert.equal(model.calls.length, 1);
+  assert.equal(await getManualTranslationJob(kv), null);
+  const status = await getWorkerState(kv);
+  assert.equal(status.lastManualCompleted, 100);
+  assert.equal(status.lastManualFailed, 100);
+  assert.match(status.lastManualError, /503/);
+});
+
+test('没有启用模型或没有勾选记录时拒绝手动任务，不创建队列', async () => {
+  const kv = createMemoryKv();
+  const model = fakeModel(okModel);
+  const { worker } = await setupWorker(kv, model.httpPost, {
+    automaticEnabled: false,
+  });
+  await assert.rejects(() => worker.requestManualTranslation([]), /没有选中/);
+  await setActiveLlmId(kv, null);
+  await assert.rejects(
+    () => worker.requestManualTranslation(['News']),
+    /没有启用/,
+  );
+  assert.equal(await getManualTranslationJob(kv), null);
+  assert.equal(model.calls.length, 0);
+});
+
+test('提示词默认与现有一致，自定义同时用于自动、手动一轮、单条与所选批量；可恢复默认', async () => {
+  const kv = createMemoryKv();
+  const model = fakeModel(okModel);
+  const { worker } = await setupWorker(kv, model.httpPost, {
+    workerOptions: { sleep: async () => worker.stop() },
+  });
+  assert.equal(await getTranslationPrompt(kv), null);
+  await enqueueTexts(kv, ['Default'], 0);
+  await worker.runRound();
+  assert.equal(model.calls[0].request.messages[0].content, SYSTEM_PROMPT);
+  const custom = '请翻译频道名称，严格返回约定的 JSON。';
+  await setTranslationPrompt(kv, custom);
+  await enqueueTexts(kv, ['Auto'], 0);
+  await worker.runRound();
+  await enqueueTexts(kv, ['ManualRound'], 0);
+  await worker.runRound({ manual: true });
+  await worker.translateOnce('Auto');
+  await worker.requestManualTranslation(['Default']);
+  await setAutomaticTranslationEnabled(kv, false);
+  await worker.start();
+  assert.equal(model.calls.length, 5);
+  assert.ok(
+    model.calls
+      .slice(1)
+      .every((call) => call.request.messages[0].content === custom),
+  );
+  await assert.rejects(() => setTranslationPrompt(kv, '  '), /不能为空/);
+  await assert.rejects(
+    () => setTranslationPrompt(kv, 'x'.repeat(20001)),
+    /不能超过/,
+  );
+  await setTranslationPrompt(kv, null);
+  await worker.translateOnce('Auto');
+  assert.equal(model.calls.at(-1).request.messages[0].content, SYSTEM_PROMPT);
+});
+
+test('手动批量进行期间的人工编辑优先于旧模型结果', async () => {
+  const kv = createMemoryKv();
+  const model = fakeModel(async (items) => {
+    await editItem(
+      kv,
+      'News',
+      { translation: '人工新闻', needsTranslation: 'yes' },
+      2,
+    );
+    return okModel(items);
+  });
+  const { worker } = await setupWorker(kv, model.httpPost, {
+    automaticEnabled: false,
+    workerOptions: { sleep: async () => worker.stop() },
+  });
+  await enqueueTexts(kv, ['News'], 0);
+  await worker.requestManualTranslation(['News']);
+  await worker.start();
+  assert.equal((await getItem(kv, 'News')).translation, '人工新闻');
+  assert.equal((await getWorkerState(kv)).lastManualSucceeded, 0);
+});
+
+test('自动重试期间关闭开关：不再请求模型、不扣后续额度，记录仍可手动执行', async () => {
+  const kv = createMemoryKv();
+  const model = fakeModel(() => ({ status: 503, text: '{}' }));
+  const { worker } = await setupWorker(kv, model.httpPost, {
+    quota: 5,
+    workerOptions: {
+      sleep: async () => setAutomaticTranslationEnabled(kv, false),
+    },
+  });
+  await enqueueTexts(kv, ['News'], 0);
+  assert.equal((await worker.runRound()).reason, 'disabled');
+  assert.equal(model.calls.length, 1);
+  assert.equal(await getQuota(kv, 'c1'), 4);
+  assert.equal((await getItem(kv, 'News')).status, STATUS.PENDING);
+  await worker.runRound({ manual: true });
+  assert.equal(model.calls.length, 2, '手动一轮接口故障也只调用一次');
+  assert.equal(await getQuota(kv, 'c1'), 4);
+});
+
+test('手动批量成功可以更新无需翻译和失败满三次的所选记录', async () => {
+  const kv = createMemoryKv();
+  const model = fakeModel(okModel);
+  const { worker } = await setupWorker(kv, model.httpPost, {
+    quota: 0,
+    automaticEnabled: false,
+    workerOptions: { sleep: async () => worker.stop() },
+  });
+  await enqueueTexts(kv, ['CNN', 'Bad'], 0);
+  await editItem(kv, 'CNN', { translation: '', needsTranslation: 'no' }, 1);
+  await batchUpdateItems(kv, ['Bad'], { status: STATUS.FAILED }, 1);
+  await worker.requestManualTranslation(['CNN', 'Bad']);
+  await worker.start();
+  assert.equal((await getItem(kv, 'CNN')).status, STATUS.SUCCESS);
+  assert.equal((await getItem(kv, 'Bad')).status, STATUS.SUCCESS);
+  assert.equal(await getQuota(kv, 'c1'), 0);
+});
+
+test('其他进程持锁时手动任务不执行也不忙循环', async () => {
+  const kv = createMemoryKv();
+  const model = fakeModel(okModel);
+  let sleeps = 0;
+  const { worker } = await setupWorker(kv, model.httpPost, {
+    automaticEnabled: false,
+    workerOptions: {
+      sleep: async () => {
+        sleeps++;
+        worker.stop();
+      },
+    },
+  });
+  await enqueueTexts(kv, ['News'], 0);
+  await worker.requestManualTranslation(['News']);
+  await kv.kvSet(STORE_KEYS.workerLock, 'another-process', { px: 90_000 });
+  await worker.start();
+  assert.equal(model.calls.length, 0);
+  assert.equal(sleeps, 1);
+  assert.equal((await getManualTranslationJob(kv)).completed, 0);
+});
+
+test('手动任务中途退出后，新的进程从已完成批次后恢复', async () => {
+  const kv = createMemoryKv();
+  const texts = Array.from({ length: 205 }, (_, i) => `Channel ${i}`);
+  const model = fakeModel((items, number) => {
+    if (number === 1) first.worker.stop();
+    return okModel(items);
+  });
+  const first = await setupWorker(kv, model.httpPost, {
+    quota: 0,
+    automaticEnabled: false,
+  });
+  await enqueueTexts(kv, texts, 0);
+  await first.worker.requestManualTranslation(texts);
+  await first.worker.start();
+  assert.equal((await getManualTranslationJob(kv)).completed, 100);
+  await kv.kvDel([STORE_KEYS.workerLock]); // 模拟旧进程锁租约已经过期。
+  const restarted = createTranslationWorker({
+    kv,
+    httpPost: model.httpPost,
+    sleep: async () => restarted.stop(),
+  });
+  await restarted.start();
+  assert.deepEqual(
+    model.calls.map((call) => call.items.length),
+    [100, 100, 5],
+  );
+  assert.equal(await getManualTranslationJob(kv), null);
+  assert.equal((await getWorkerState(kv)).lastManualCompleted, 205);
 });

@@ -8,27 +8,9 @@ import {
   ACCESS_KEY_HINT,
   getAccessKey,
   setAccessKey,
-  verifyAccessKey,
 } from '@/lib/access-key.client';
 
-type KeyStatus = 'empty' | 'checking' | 'valid' | 'invalid' | 'error';
-
-const STATUS_TEXT: Record<KeyStatus, string> = {
-  empty: '未填写',
-  checking: '校验中…',
-  valid: '已生效',
-  invalid: '无效或已停用',
-  error: '校验失败，请稍后重试',
-};
-const STATUS_STYLE: Record<KeyStatus, string> = {
-  empty: 'text-gray-500 dark:text-gray-400',
-  checking: 'text-gray-500 dark:text-gray-400',
-  valid: 'text-green-600 dark:text-green-400',
-  invalid: 'text-red-600 dark:text-red-400',
-  error: 'text-amber-600 dark:text-amber-400',
-};
-
-// 用户菜单「访问秘钥」弹窗：保存前校验，按设备保存在浏览器本地。
+// 用户菜单「访问秘钥」弹窗：不校验，按设备保存在浏览器本地。
 export default function AccessKeyDialog({
   isOpen,
   onClose,
@@ -37,40 +19,25 @@ export default function AccessKeyDialog({
   onClose: () => void;
 }) {
   const [value, setValue] = useState('');
-  const [status, setStatus] = useState<KeyStatus>('empty');
-
-  const check = async (key: string) => {
-    if (!key) {
-      setStatus('empty');
-      return false;
-    }
-    setStatus('checking');
-    try {
-      const valid = await verifyAccessKey(key);
-      setStatus(valid ? 'valid' : 'invalid');
-      return valid;
-    } catch {
-      setStatus('error');
-      return false;
-    }
-  };
+  const [saved, setSaved] = useState('');
 
   useEffect(() => {
     if (!isOpen) return;
-    const saved = getAccessKey();
-    setValue(saved);
-    void check(saved);
+    const key = getAccessKey();
+    setValue(key);
+    setSaved(key);
   }, [isOpen]);
 
-  const save = async () => {
+  const save = () => {
     const key = value.trim();
-    if (await check(key)) setAccessKey(key);
+    setAccessKey(key);
+    setSaved(key);
   };
 
   const clear = () => {
     setValue('');
     setAccessKey('');
-    setStatus('empty');
+    setSaved('');
   };
 
   if (!isOpen) return null;
@@ -107,8 +74,8 @@ export default function AccessKeyDialog({
           className='w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent'
         />
         <div className='flex items-center justify-between gap-2'>
-          <span className={`text-xs ${STATUS_STYLE[status]}`}>
-            状态：{STATUS_TEXT[status]}
+          <span className='text-xs text-gray-500 dark:text-gray-400'>
+            状态：{saved ? '已保存' : '未填写'}
           </span>
           <div className='flex gap-2'>
             <button
@@ -120,7 +87,7 @@ export default function AccessKeyDialog({
             </button>
             <button
               type='button'
-              disabled={status === 'checking' || !value.trim()}
+              disabled={!value.trim()}
               onClick={save}
               className='px-3 py-1 text-xs rounded-md bg-green-600 text-white hover:bg-green-700 disabled:opacity-50'
             >

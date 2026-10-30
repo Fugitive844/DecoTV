@@ -20,6 +20,7 @@ import { AdminConfig } from '@/lib/admin.types';
 import AccessKeyPanel from '@/components/admin-manage/AccessKeyPanel';
 import LiveSourceDetail from '@/components/admin-manage/LiveSourceDetail';
 import LlmConfigPanel from '@/components/admin-manage/LlmConfigPanel';
+import { QueryButton } from '@/components/admin-manage/manage-ui';
 import {
   LiveSourceConfig,
   VideoSourceConfig,
@@ -50,6 +51,7 @@ function ManagePageClient() {
   const [config, setConfig] = useState<AdminConfig | null>(null);
   const [storageMode, setStorageMode] = useState<'cloud' | 'local'>('cloud');
   const [error, setError] = useState('');
+  const [querying, setQuerying] = useState(false);
 
   const navigate = useCallback(
     (next: Tab, live?: string) => {
@@ -63,6 +65,7 @@ function ManagePageClient() {
 
   // 源管理沿用原管理面板的配置读取与本地模式同步方式。
   const fetchConfig = useCallback(async () => {
+    setQuerying(true);
     try {
       const response = await fetch('/api/admin/config', { cache: 'no-store' });
       const data = await response.json();
@@ -86,6 +89,8 @@ function ManagePageClient() {
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : '获取配置失败');
+    } finally {
+      setQuerying(false);
     }
   }, []);
 
@@ -180,6 +185,9 @@ function ManagePageClient() {
             <h1 className='text-xl font-semibold text-gray-900 dark:text-gray-100'>
               {current.label}
             </h1>
+            {(tab === 'video' || (tab === 'live' && !liveKey)) && (
+              <QueryButton onQuery={fetchConfig} loading={querying} />
+            )}
           </div>
           {backgroundHint && (
             <p className='mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:bg-amber-900/20 dark:text-amber-300'>

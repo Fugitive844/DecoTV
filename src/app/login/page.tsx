@@ -8,7 +8,6 @@ import {
   ACCESS_KEY_HINT,
   getAccessKey,
   setAccessKey,
-  verifyAccessKey,
 } from '@/lib/access-key.client';
 import { getSafeRedirectPath } from '@/lib/safe-redirect';
 import { CURRENT_VERSION } from '@/lib/version';
@@ -224,12 +223,8 @@ function LoginPageClient() {
 
     try {
       setLoading(true);
-      // 访问秘钥选填：填写了就先校验，无效时提示且不登录。
+      // 访问秘钥选填，不校验，登录成功后直接保存。
       const key = accessKey.trim();
-      if (key && !(await verifyAccessKey(key))) {
-        setError('秘钥无效，请检查或留空');
-        return;
-      }
       const res = await fetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

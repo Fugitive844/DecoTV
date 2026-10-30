@@ -4,7 +4,13 @@ import { ArrowLeft, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 
 import { buttonStyles } from './admin-shared';
-import { formatTime, Pager, SearchBox, useJson } from './manage-ui';
+import {
+  formatTime,
+  Pager,
+  QueryButton,
+  SearchBox,
+  useJson,
+} from './manage-ui';
 
 interface Detail {
   source: {
@@ -222,6 +228,13 @@ export default function LiveSourceDetail({
             value={q}
             onChange={setQ}
             placeholder={tab === 'groups' ? '搜索分类' : '搜索频道名或分类'}
+          />
+          <QueryButton
+            loading={detail.loading || list.loading}
+            onQuery={() => {
+              detail.reload();
+              list.reload();
+            }}
           />
           <span className='text-xs text-gray-500 dark:text-gray-400'>
             只读：分类与频道以抓取结果为准

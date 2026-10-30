@@ -5,7 +5,13 @@ import { useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { buttonStyles } from './admin-shared';
-import { formatTime, Notice, postJson, useJson } from './manage-ui';
+import {
+  formatTime,
+  Notice,
+  postJson,
+  QueryButton,
+  useJson,
+} from './manage-ui';
 
 interface LlmItem {
   id: string;
@@ -106,14 +112,17 @@ export default function LlmConfigPanel() {
           接口；任意时刻最多启用一个配置，额度各自独立。
           <br />
           额度：-1 不限，0
-          禁止新的自动调用，正整数按实际请求次数扣减；手动单行翻译不扣额度。
+          禁止新的自动调用，正整数按实际请求次数扣减；手动翻译（单条、一轮、所选批量）均不扣额度。
         </p>
-        <button
-          onClick={() => openEditor()}
-          className={`${buttonStyles.success} inline-flex items-center gap-1`}
-        >
-          <Plus size={16} /> 新增配置
-        </button>
+        <div className='flex flex-wrap items-center gap-2'>
+          <QueryButton onQuery={list.reload} loading={list.loading} />
+          <button
+            onClick={() => openEditor()}
+            className={`${buttonStyles.success} inline-flex items-center gap-1`}
+          >
+            <Plus size={16} /> 新增配置
+          </button>
+        </div>
       </div>
       {message && <Notice kind={message.kind}>{message.text}</Notice>}
       {list.error && <Notice kind='error'>{list.error}</Notice>}

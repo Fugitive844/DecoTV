@@ -10,6 +10,7 @@ import {
   Notice,
   Pager,
   postJson,
+  QueryButton,
   SearchBox,
   useJson,
 } from './manage-ui';
@@ -175,6 +176,7 @@ export default function AccessKeyPanel() {
             <option value='true'>已启用</option>
             <option value='false'>已停用</option>
           </select>
+          <QueryButton onQuery={list.reload} loading={list.loading} />
           <span className='text-sm text-gray-500'>
             共 {list.data?.counts.all ?? 0} 个，启用{' '}
             {list.data?.counts.enabled ?? 0} 个

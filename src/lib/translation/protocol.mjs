@@ -60,7 +60,7 @@ export function isThinkingEnabled(config) {
 }
 
 /**
- * @param {{ baseUrl: string, model: string, thinking?: boolean }} config
+ * @param {{ baseUrl: string, model: string, thinking?: boolean, systemPrompt?: string | null }} config
  * @param {{ id: string, text: string }[]} items
  */
 export function buildTranslationRequestBody(config, items) {
@@ -68,7 +68,7 @@ export function buildTranslationRequestBody(config, items) {
   const body = {
     model: config.model,
     messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: config.systemPrompt || SYSTEM_PROMPT },
       {
         role: 'user',
         content: JSON.stringify({

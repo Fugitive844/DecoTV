@@ -34,6 +34,9 @@ const KEY = {
   workerState: 'tr:worker:state',
   workerLock: 'tr:worker:lock',
   workerWake: 'tr:worker:wake',
+  automaticEnabled: 'tr:worker:automatic-enabled',
+  manualJob: 'tr:worker:manual-job',
+  systemPrompt: 'tr:system-prompt',
 };
 export const STORE_KEYS = KEY;
 
@@ -636,6 +639,62 @@ export async function recordLlmCall(kv, id, { kind, error }, now) {
 
 export async function getWorkerState(kv) {
   return parseJson(await kv.kvGet(KEY.workerState)) || {};
+}
+
+/** 自动翻译默认关闭；收集入库不受此设置影响。 @param {Kv} kv */
+export async function isAutomaticTranslationEnabled(kv) {
+  return (await kv.kvGet(KEY.automaticEnabled)) === 'true';
+}
+
+/** @param {Kv} kv @param {boolean} enabled */
+export async function setAutomaticTranslationEnabled(kv, enabled) {
+  await kv.kvSet(KEY.automaticEnabled, enabled ? 'true' : 'false');
+}
+
+/** null 表示使用内置默认提示词。 @param {Kv} kv */
+export async function getTranslationPrompt(kv) {
+  return kv.kvGet(KEY.systemPrompt);
+}
+
+/** @param {Kv} kv @param {string | null} prompt */
+export async function setTranslationPrompt(kv, prompt) {
+  if (prompt === null) {
+    await kv.kvDel([KEY.systemPrompt]);
+    return;
+  }
+  const value = prompt.trim();
+  if (!value) throw new Error('提示词不能为空');
+  if (value.length > 20_000) throw new Error('提示词不能超过 20000 字符');
+  await kv.kvSet(KEY.systemPrompt, value);
+}
+
+/**
+ * @typedef {{ id: string, texts: string[] | null, completed: number, succeeded: number, failed: number, createdAt: number }} ManualTranslationJob
+ */
+
+/** @param {Kv} kv @returns {Promise<ManualTranslationJob | null>} */
+export async function getManualTranslationJob(kv) {
+  return parseJson(await kv.kvGet(KEY.manualJob));
+}
+
+/**
+ * 手动任务持久化，多个页面重复提交时只接受一个任务。null 表示手动执行下一批。
+ * @param {Kv} kv @param {string[] | null} texts @param {string} id @param {number} now
+ */
+export async function queueManualTranslationJob(kv, texts, id, now) {
+  const unique = texts === null ? null : Array.from(new Set(texts));
+  if (unique && unique.length === 0) throw new Error('没有选中任何记录');
+  const job = {
+    id,
+    texts: unique,
+    completed: 0,
+    succeeded: 0,
+    failed: 0,
+    createdAt: now,
+  };
+  if (!(await kv.kvSet(KEY.manualJob, JSON.stringify(job), { nx: true })))
+    throw new Error('已有手动翻译任务，请等待完成后再提交');
+  return job;
 }
 
 export async function setWorkerState(kv, patch) {

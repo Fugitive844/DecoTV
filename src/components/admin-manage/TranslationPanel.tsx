@@ -10,6 +10,7 @@ import {
   Notice,
   Pager,
   postJson,
+  QueryButton,
   SearchBox,
   useJson,
 } from './manage-ui';
@@ -33,6 +34,10 @@ interface ListResponse {
 interface StatusResponse {
   backgroundSupported: boolean;
   activeId: string | null;
+  automaticEnabled: boolean;
+  systemPrompt: string;
+  defaultSystemPrompt: string;
+  manualTask: { total: number; completed: number; nextBatch: boolean } | null;
   worker: {
     lastRoundAt?: number;
     lastClaimed?: number;
@@ -42,6 +47,11 @@ interface StatusResponse {
     lastStopAt?: number;
     sleepingUntil?: number;
     lastProtocolErrors?: string[];
+    lastManualTotal?: number;
+    lastManualCompleted?: number;
+    lastManualSucceeded?: number;
+    lastManualFailed?: number;
+    lastManualError?: string;
   };
 }
 
@@ -52,7 +62,7 @@ const STATUS_LABEL: Record<string, string> = {
   retry_wait: '待重试',
   success: '成功',
   no_need: '无需翻译',
-  failed: '失败',
+  failed: '失败（已停止自动重试）',
 };
 const STATUS_STYLE: Record<string, string> = {
   success:
@@ -79,6 +89,12 @@ const SOURCE_LABEL: Record<string, string> = {
   '': '—',
 };
 
+function getErrorMessage(item: Item) {
+  if (item.status === 'failed')
+    return `已停止自动重试（累计失败 ${item.failCount} 次）`;
+  return item.lastError || '—';
+}
+
 export default function TranslationPanel() {
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('');
@@ -102,6 +118,24 @@ export default function TranslationPanel() {
   const [allFiltered, setAllFiltered] = useState(false);
   const [batchNeeds, setBatchNeeds] = useState('');
   const [batchStatus, setBatchStatus] = useState('');
+  const [prompt, setPrompt] = useState('');
+
+  const savedPrompt = state.data?.systemPrompt;
+  useEffect(() => {
+    if (savedPrompt !== undefined) setPrompt(savedPrompt);
+  }, [savedPrompt]);
+
+  const reloadList = list.reload;
+  const reloadState = state.reload;
+  const manualPending = !!state.data?.manualTask;
+  useEffect(() => {
+    if (!manualPending) return;
+    const timer = setInterval(() => {
+      reloadList();
+      reloadState();
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [manualPending, reloadList, reloadState]);
 
   useEffect(() => setPage(1), [q, status, needs, pageSize]);
   useEffect(() => {
@@ -161,6 +195,22 @@ export default function TranslationPanel() {
     }
   };
 
+  const translateSelection = async () => {
+    const ok = await act(
+      {
+        action: 'translate_batch',
+        ...(allFiltered
+          ? { filter: { q, status, needs } }
+          : { texts: Array.from(selected) }),
+      },
+      '已提交 {total} 条手动翻译，每批最多 100 条，不受自动额度限制',
+    );
+    if (ok) {
+      setSelected(new Set());
+      setAllFiltered(false);
+    }
+  };
+
   const act = async (
     body: Record<string, unknown>,
     success: string,
@@ -175,6 +225,7 @@ export default function TranslationPanel() {
         text: success
           .replace('{created}', String(data.created ?? 0))
           .replace('{updated}', String(data.updated ?? 0))
+          .replace('{total}', String(data.total ?? 0))
           .replace('{skipped}', String(data.skipped ?? 0)),
       });
       list.reload();
@@ -245,20 +296,28 @@ export default function TranslationPanel() {
               <Languages size={14} /> 收集历史原文
             </button>
             <button
-              disabled={!!busyRow}
+              disabled={!!busyRow || manualPending || !s?.backgroundSupported}
               className={`${buttonStyles.secondarySmall} inline-flex items-center gap-1`}
-              onClick={() => act({ action: 'run_now' }, '已唤醒翻译任务')}
+              title='手动处理下一批待翻译记录，最多 100 条，不检查或扣减自动额度，不自动重试'
+              onClick={() =>
+                act(
+                  { action: 'run_now' },
+                  '已提交手动翻译一轮，最多 100 条，不扣自动额度',
+                )
+              }
             >
-              <RefreshCw size={14} /> 立即执行一轮
+              <RefreshCw size={14} /> 手动执行一轮
             </button>
           </div>
         </div>
         {s && (
           <div className='mt-3 grid gap-1 text-xs text-gray-600 dark:text-gray-400 md:grid-cols-2'>
             <span>
-              后台任务：
+              自动翻译：
               {s.backgroundSupported
-                ? '运行中（每轮最多 100 条，不足则休眠 2 分钟）'
+                ? s.automaticEnabled
+                  ? '已开启（每轮最多 100 条，不足则休眠 2 分钟）'
+                  : '已关闭（新词只入库，等待手动执行）'
                 : '无数据库模式，不运行'}
             </span>
             <span>
@@ -269,7 +328,32 @@ export default function TranslationPanel() {
               {s.worker.lastClaimed ?? 0} 条，成功 {s.worker.lastSucceeded ?? 0}
               ，失败 {s.worker.lastFailed ?? 0}
             </span>
-            <span>下次扫描：{formatTime(s.worker.sleepingUntil)}</span>
+            <span>
+              下次自动扫描：
+              {s.automaticEnabled
+                ? formatTime(s.worker.sleepingUntil)
+                : '已关闭'}
+            </span>
+            {s.manualTask && (
+              <span className='text-blue-600 md:col-span-2'>
+                {s.manualTask.nextBatch
+                  ? '手动一轮已排队或正在执行（最多 100 条）'
+                  : `手动批量翻译中：已处理 ${s.manualTask.completed} / ${s.manualTask.total} 条`}
+              </span>
+            )}
+            {!s.manualTask && s.worker.lastManualTotal !== undefined && (
+              <span className='md:col-span-2'>
+                最近手动批量：已处理 {s.worker.lastManualCompleted} /{' '}
+                {s.worker.lastManualTotal} 条， 成功{' '}
+                {s.worker.lastManualSucceeded}，失败或未更新{' '}
+                {s.worker.lastManualFailed}
+              </span>
+            )}
+            {s.worker.lastManualError && (
+              <span className='text-red-600 md:col-span-2'>
+                手动任务中止：{s.worker.lastManualError}
+              </span>
+            )}
             {s.worker.lastStop && (
               <span className='text-amber-600 md:col-span-2'>
                 最近中止（{formatTime(s.worker.lastStopAt)}）：
@@ -283,9 +367,80 @@ export default function TranslationPanel() {
             )}
           </div>
         )}
+        <label className='mt-3 flex flex-wrap items-center gap-2 text-sm text-gray-700 dark:text-gray-300'>
+          <input
+            type='checkbox'
+            checked={s?.automaticEnabled ?? false}
+            disabled={!!busyRow || !s?.backgroundSupported}
+            onChange={(event) => {
+              const enabled = event.target.checked;
+              void act(
+                { action: 'set_automatic', enabled },
+                enabled
+                  ? '已开启自动扫描翻译，自动调用受额度限制'
+                  : '已关闭自动翻译，新词只入库；正在执行的请求完成后停止后续自动调用',
+              );
+            }}
+          />
+          自动扫描并翻译
+          <span className='text-xs text-gray-500'>
+            默认关闭；手动执行与所选批量翻译不受自动额度限制。
+          </span>
+        </label>
       </div>
 
       {message && <Notice kind={message.kind}>{message.text}</Notice>}
+      {state.error && <Notice kind='error'>{state.error}</Notice>}
+
+      <details className='rounded-xl bg-white/80 p-4 shadow-sm dark:bg-gray-800/50'>
+        <summary className='cursor-pointer text-sm font-medium text-gray-800 dark:text-gray-200'>
+          翻译提示词（可编辑）
+        </summary>
+        <p className='mt-3 text-xs text-gray-500'>
+          默认使用当前内置提示词，保存后用于后续所有翻译请求。请保留
+          items、id、needsTranslation、translation 的 JSON 返回格式。
+        </p>
+        <textarea
+          aria-label='翻译系统提示词'
+          rows={12}
+          maxLength={20000}
+          value={prompt}
+          onChange={(event) => setPrompt(event.target.value)}
+          disabled={!s || !!busyRow}
+          className='mt-3 w-full rounded-lg border border-gray-300 bg-white p-3 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100'
+        />
+        <div className='mt-2 flex gap-2'>
+          <button
+            className={buttonStyles.primarySmall}
+            disabled={
+              !!busyRow || !prompt.trim() || prompt.trim() === s?.systemPrompt
+            }
+            onClick={() =>
+              act(
+                { action: 'set_prompt', prompt },
+                '翻译提示词已保存，后续请求使用新提示词',
+              )
+            }
+          >
+            保存提示词
+          </button>
+          <button
+            className={buttonStyles.secondarySmall}
+            disabled={!!busyRow || !s}
+            onClick={async () => {
+              if (
+                await act(
+                  { action: 'set_prompt', useDefault: true },
+                  '已恢复默认翻译提示词',
+                )
+              )
+                setPrompt(s?.defaultSystemPrompt || '');
+            }}
+          >
+            恢复默认
+          </button>
+        </div>
+      </details>
 
       <div className='rounded-xl bg-white/80 p-4 shadow-sm dark:bg-gray-800/50'>
         <div className='mb-3 flex flex-wrap items-center gap-2'>
@@ -312,6 +467,13 @@ export default function TranslationPanel() {
             <option value='yes'>是</option>
             <option value='no'>否</option>
           </select>
+          <QueryButton
+            loading={list.loading || state.loading}
+            onQuery={() => {
+              list.reload();
+              state.reload();
+            }}
+          />
         </div>
         <div className='mb-3 flex flex-wrap items-center gap-2 rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-700 dark:bg-gray-900/40 dark:text-gray-300'>
           <span className='font-medium'>
@@ -375,6 +537,23 @@ export default function TranslationPanel() {
           >
             批量修改
           </button>
+          <button
+            className={
+              !selectedCount || !!busyRow || manualPending
+                ? buttonStyles.disabledSmall
+                : buttonStyles.successSmall
+            }
+            disabled={
+              !selectedCount ||
+              !!busyRow ||
+              manualPending ||
+              !s?.backgroundSupported
+            }
+            title='仅翻译选中的记录；全选筛选结果时跨所有页执行。每批最多 100 条，不扣自动额度，不自动重试'
+            onClick={translateSelection}
+          >
+            手动翻译所选（{selectedCount}）
+          </button>
         </div>
         {list.error && <Notice kind='error'>{list.error}</Notice>}
         <div className='overflow-x-auto'>
@@ -432,10 +611,14 @@ export default function TranslationPanel() {
                     {SOURCE_LABEL[item.resultSource] ?? item.resultSource}
                   </td>
                   <td
-                    className='max-w-[14rem] truncate px-3 py-2 text-xs text-red-600 dark:text-red-400'
-                    title={item.lastError}
+                    className='max-w-[14rem] break-words px-3 py-2 text-xs text-red-600 dark:text-red-400'
+                    title={
+                      item.status === 'failed'
+                        ? `${getErrorMessage(item)}\n最近失败原因：${item.lastError || '未记录'}`
+                        : item.lastError
+                    }
                   >
-                    {item.lastError || '—'}
+                    {getErrorMessage(item)}
                   </td>
                   <td className='whitespace-nowrap px-3 py-2 text-xs'>
                     {formatTime(item.updatedAt)}

@@ -26,8 +26,12 @@ import {
   getActiveLlmId,
   getItem,
   getLlmConfig,
+  getManualTranslationJob,
+  getTranslationPrompt,
+  isAutomaticTranslationEnabled,
   MAX_FAIL_COUNT,
   recordLlmCall,
+  queueManualTranslationJob,
   releaseClaimed,
   STATUS,
   STORE_KEYS,
@@ -123,7 +127,10 @@ export function createTranslationWorker(deps) {
   /** @param {{ baseUrl: string, model: string, apiKey: string }} config @param {{ id: string, text: string }[]} items */
   const callModel = async (config, items) => {
     const url = buildChatCompletionsUrl(config.baseUrl);
-    const body = JSON.stringify(buildTranslationRequestBody(config, items));
+    const systemPrompt = await getTranslationPrompt(kv);
+    const body = JSON.stringify(
+      buildTranslationRequestBody({ ...config, systemPrompt }, items),
+    );
     let response;
     try {
       response = await deps.httpPost(
@@ -217,9 +224,11 @@ export function createTranslationWorker(deps) {
 
   /**
    * 执行一轮：返回认领数量与是否中止（无配置、额度不足、接口故障）。
-   * @returns {Promise<{ claimed: number, aborted: boolean, reason?: string }>}
+   * @returns {Promise<{ claimed: number, aborted: boolean, reason?: string, succeeded?: number, failed?: number }>}
    */
-  const runRound = async () => {
+  const runRound = async ({ manual = false } = {}) => {
+    if (!manual && !(await isAutomaticTranslationEnabled(kv)))
+      return { claimed: 0, aborted: true, reason: 'disabled' };
     const startedAt = now();
     const claimed = await claimBatch(kv, startedAt, batchSize, leaseMs);
     if (claimed.length === 0) {
@@ -296,8 +305,16 @@ export function createTranslationWorker(deps) {
       mustTranslate: item.needsTranslation === 'yes',
     }));
     let outcome = null;
-    for (let attempt = 0; attempt <= transportRetryDelays.length; attempt++) {
-      const quota = await consumeQuota(kv, config.id, newRequestId());
+    const retryDelays = manual ? [] : transportRetryDelays;
+    const callKind = manual ? 'manual' : 'auto';
+    for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
+      if (!manual && !(await isAutomaticTranslationEnabled(kv))) {
+        await releaseClaimed(kv, remaining, now());
+        return { claimed: claimed.length, aborted: true, reason: 'disabled' };
+      }
+      const quota = manual
+        ? { allowed: true }
+        : await consumeQuota(kv, config.id, newRequestId());
       if (!quota.allowed) {
         await releaseClaimed(kv, remaining, now());
         await setWorkerState(kv, {
@@ -310,14 +327,14 @@ export function createTranslationWorker(deps) {
       }
       try {
         outcome = await exclusive(() => callModel(config, requestItems));
-        await recordCall(config.id, { kind: 'auto' });
+        await recordCall(config.id, { kind: callKind });
         break;
       } catch (error) {
         if (!(error instanceof TranslationTransportError)) throw error;
-        await recordCall(config.id, { kind: 'auto', error: error.message });
+        await recordCall(config.id, { kind: callKind, error: error.message });
         log(`模型接口错误（第 ${attempt + 1} 次）：${error.message}`);
-        if (attempt < transportRetryDelays.length) {
-          await sleep(transportRetryDelays[attempt]);
+        if (attempt < retryDelays.length) {
+          await sleep(retryDelays[attempt]);
           continue;
         }
         // 接口级故障不计入词失败次数，保留记录等待下一轮。
@@ -325,7 +342,9 @@ export function createTranslationWorker(deps) {
         await setWorkerState(kv, {
           lastRoundAt: startedAt,
           lastClaimed: claimed.length,
-          lastStop: `模型接口连续失败，本轮停止：${error.message}`,
+          lastStop: manual
+            ? `手动翻译接口失败，本轮停止：${error.message}`
+            : `模型接口连续失败，本轮停止：${error.message}`,
           lastStopAt: now(),
         });
         return { claimed: claimed.length, aborted: true, reason: 'transport' };
@@ -360,7 +379,7 @@ export function createTranslationWorker(deps) {
       lastProtocolErrors: (outcome?.protocolErrors || []).slice(0, 5),
       lastStop: '',
     });
-    return { claimed: claimed.length, aborted: false };
+    return { claimed: claimed.length, aborted: false, succeeded, failed };
   };
 
   // 多进程／重复启动时只有持锁进程执行循环；进程退出后锁按 lockMs 过期。
@@ -380,6 +399,115 @@ export function createTranslationWorker(deps) {
   /** @type {Set<string>} */
   const manualInFlight = new Set();
 
+  /** 手动选中项允许重新翻译终态；失败保留原结果，不自动重试。 */
+  const translateSelectedBatch = async (texts) => {
+    const items = (
+      await Promise.all(texts.map((text) => getItem(kv, text)))
+    ).filter(Boolean);
+    const activeId = await getActiveLlmId(kv);
+    const config = activeId ? await getLlmConfig(kv, activeId) : null;
+    if (!config || !config.apiKey)
+      throw new Error('没有启用的模型配置，请先在「大模型配置」中启用');
+    if (!items.length)
+      return { succeeded: 0, failed: texts.length, aborted: false };
+    let outcome;
+    let transportError = '';
+    try {
+      outcome = await exclusive(() =>
+        callModel(
+          config,
+          items.map((item, index) => ({
+            id: String(index + 1),
+            text: item.text,
+            mustTranslate: item.needsTranslation === 'yes',
+          })),
+        ),
+      );
+      await recordCall(config.id, { kind: 'manual' });
+    } catch (error) {
+      if (!(error instanceof TranslationTransportError)) throw error;
+      transportError = error.message;
+      await recordCall(config.id, { kind: 'manual', error: transportError });
+    }
+    let succeeded = 0;
+    let failed = texts.length - items.length;
+    for (let index = 0; index < items.length; index++) {
+      const item = items[index];
+      const result = outcome?.results.get(String(index + 1)) || {
+        kind: 'fail',
+        error: transportError || '模型漏项',
+      };
+      const changed = await commitWithRetry(() =>
+        commitClaimed(
+          kv,
+          item,
+          result.kind === 'fail'
+            ? () => ({ lastError: `手动翻译失败：${result.error}` })
+            : resultPatch(item, result, 'model', now()),
+          now(),
+        ),
+      );
+      if (changed && result.kind !== 'fail') succeeded++;
+      else failed++;
+    }
+    return {
+      succeeded,
+      failed,
+      aborted: !!transportError,
+      error: transportError,
+    };
+  };
+
+  /** 每次只执行手动任务的一批，下一批仍由同一个持锁工作循环处理。 */
+  const runManualJob = async (job) => {
+    await setWorkerState(kv, { sleepingUntil: 0, lastManualError: '' });
+    if (job.texts === null) {
+      const result = await runRound({ manual: true });
+      await setWorkerState(kv, {
+        lastManualTotal: result.claimed,
+        lastManualCompleted: result.aborted ? 0 : result.claimed,
+        lastManualSucceeded: result.succeeded ?? 0,
+        lastManualFailed: result.failed ?? 0,
+        lastManualError: result.aborted
+          ? `本轮未完成（${result.reason}），请检查模型配置或接口后手动重试`
+          : '',
+        lastManualAt: now(),
+      });
+      await kv.kvCompareAndSet(STORE_KEYS.manualJob, JSON.stringify(job), null);
+      return result;
+    }
+    const texts = job.texts.slice(job.completed, job.completed + batchSize);
+    const result = await translateSelectedBatch(texts);
+    const next = {
+      ...job,
+      completed: job.completed + texts.length,
+      succeeded: job.succeeded + result.succeeded,
+      failed: job.failed + result.failed,
+    };
+    const done = result.aborted || next.completed >= job.texts.length;
+    await setWorkerState(kv, {
+      lastManualTotal: job.texts.length,
+      lastManualCompleted: next.completed,
+      lastManualSucceeded: next.succeeded,
+      lastManualFailed: next.failed,
+      lastManualError: result.aborted ? result.error || '手动任务已中止' : '',
+      lastManualAt: now(),
+    });
+    await kv.kvCompareAndSet(
+      STORE_KEYS.manualJob,
+      JSON.stringify(job),
+      done ? null : JSON.stringify(next),
+    );
+    return { claimed: texts.length, aborted: result.aborted };
+  };
+
+  const wake = () => {
+    wakeResolve();
+    void kv
+      .kvSet(STORE_KEYS.workerWake, String(Date.now()))
+      .catch(() => undefined);
+  };
+
   return {
     runRound,
     start() {
@@ -398,10 +526,31 @@ export function createTranslationWorker(deps) {
         lastWakeSeen = await readWake();
         while (running) {
           let result = { claimed: 0, aborted: true };
+          let ownsLock = false;
           try {
             if (await holdLock()) {
+              ownsLock = true;
               await setWorkerState(kv, { owner: ownerId, running: true });
-              result = await runRound();
+              const manualJob = await getManualTranslationJob(kv);
+              if (manualJob) {
+                try {
+                  result = await runManualJob(manualJob);
+                } catch (error) {
+                  // 手动请求不能因下一次扫描而自动重复；明确记录中止并等待再次手动提交。
+                  await kv.kvCompareAndSet(
+                    STORE_KEYS.manualJob,
+                    JSON.stringify(manualJob),
+                    null,
+                  );
+                  await setWorkerState(kv, {
+                    lastManualError: `${/** @type {Error} */ (error)?.message || error}`,
+                    lastManualAt: now(),
+                  });
+                  throw error;
+                }
+              } else if (await isAutomaticTranslationEnabled(kv)) {
+                result = await runRound();
+              }
             }
           } catch (error) {
             log('翻译工作循环出错', error);
@@ -411,6 +560,7 @@ export function createTranslationWorker(deps) {
             }).catch(() => {});
           }
           if (!running) break;
+          if (ownsLock && (await getManualTranslationJob(kv))) continue;
           if (result.claimed >= batchSize && !result.aborted) continue;
           await setWorkerState(kv, { sleepingUntil: now() + idleMs }).catch(
             () => {},
@@ -428,11 +578,24 @@ export function createTranslationWorker(deps) {
       wakeResolve();
     },
     /** 立即结束休眠，开始下一轮（例如收集历史后）。 */
-    wake() {
-      wakeResolve();
-      void kv
-        .kvSet(STORE_KEYS.workerWake, String(Date.now()))
-        .catch(() => undefined);
+    wake,
+    /**
+     * 入队后立即返回，模型请求由后台持锁进程串行执行。
+     * @param {string[] | null} [texts]
+     */
+    async requestManualTranslation(texts = null) {
+      const activeId = await getActiveLlmId(kv);
+      const config = activeId ? await getLlmConfig(kv, activeId) : null;
+      if (!config || !config.apiKey)
+        throw new Error('没有启用的模型配置，请先在「大模型配置」中启用');
+      const job = await queueManualTranslationJob(
+        kv,
+        texts,
+        newRequestId(),
+        now(),
+      );
+      wake();
+      return job;
     },
     /**
      * 任意行手动翻译一次：绕过且不扣自动额度，只发 1 次 HTTP，不自动重试。

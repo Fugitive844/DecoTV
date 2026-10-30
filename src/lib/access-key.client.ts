@@ -31,14 +31,3 @@ export function withAccessKey(url: string): string {
   if (!key) return url;
   return `${url}${url.includes('?') ? '&' : '?'}ak=${encodeURIComponent(key)}`;
 }
-
-/** 校验秘钥是否有效（停用或不存在均为无效）。 */
-export async function verifyAccessKey(value: string): Promise<boolean> {
-  const response = await fetch(
-    `/api/access-key/verify?ak=${encodeURIComponent(value.trim())}`,
-    { cache: 'no-store' },
-  );
-  if (!response.ok) throw new Error(`校验失败 (${response.status})`);
-  const data = (await response.json()) as { valid?: boolean };
-  return data.valid === true;
-}

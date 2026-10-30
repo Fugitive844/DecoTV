@@ -1,6 +1,6 @@
 'use client';
 
-import { Search } from 'lucide-react';
+import { RefreshCw, Search } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 
 import { buttonStyles } from './admin-shared';
@@ -54,6 +54,27 @@ export async function postJson(url: string, body: Record<string, unknown>) {
   if (!response.ok)
     throw new Error(data.error || `请求失败：${response.status}`);
   return data;
+}
+
+export function QueryButton({
+  onQuery,
+  loading = false,
+}: {
+  onQuery: () => void | Promise<void>;
+  loading?: boolean;
+}) {
+  return (
+    <button
+      type='button'
+      onClick={() => void onQuery()}
+      disabled={loading}
+      className={`${loading ? buttonStyles.disabledSmall : buttonStyles.secondarySmall} inline-flex items-center gap-1`}
+      title='重新查询当前列表数据'
+    >
+      <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+      {loading ? '查询中…' : '查询 / 刷新'}
+    </button>
+  );
 }
 
 export function formatTime(value?: number | null) {

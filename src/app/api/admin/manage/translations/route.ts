@@ -8,6 +8,7 @@ import {
 } from '@/lib/admin-auth';
 import { getConfig } from '@/lib/config';
 import { peekLiveChannels } from '@/lib/live';
+import { SYSTEM_PROMPT } from '@/lib/translation/protocol.mjs';
 import {
   collectChannelTexts,
   getTranslationWorker,
@@ -18,10 +19,15 @@ import {
   batchUpdateItems,
   editItem,
   getActiveLlmId,
+  getManualTranslationJob,
+  getTranslationPrompt,
   getWorkerState,
+  isAutomaticTranslationEnabled,
   listAllItems,
   rekeyItem,
   resetItem,
+  setAutomaticTranslationEnabled,
+  setTranslationPrompt,
 } from '@/lib/translation/store-core.mjs';
 
 export const runtime = 'nodejs';
@@ -32,14 +38,28 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
 
   if (searchParams.get('view') === 'status') {
-    const [worker, activeId] = await Promise.all([
-      getWorkerState(kv),
-      getActiveLlmId(kv),
-    ]);
+    const [worker, activeId, automaticEnabled, manualJob, prompt] =
+      await Promise.all([
+        getWorkerState(kv),
+        getActiveLlmId(kv),
+        isAutomaticTranslationEnabled(kv),
+        getManualTranslationJob(kv),
+        getTranslationPrompt(kv),
+      ]);
     return jsonNoStore({
       backgroundSupported: isTranslationBackgroundSupported(),
       worker,
       activeId,
+      automaticEnabled,
+      systemPrompt: prompt || SYSTEM_PROMPT,
+      defaultSystemPrompt: SYSTEM_PROMPT,
+      manualTask: manualJob
+        ? {
+            total: manualJob.texts?.length ?? 100,
+            completed: manualJob.completed,
+            nextBatch: manualJob.texts === null,
+          }
+        : null,
     });
   }
 
@@ -162,8 +182,45 @@ export async function POST(request: NextRequest) {
         return jsonNoStore({ ok: true, total: texts.length, ...result });
       }
       case 'run_now': {
+        if (!isTranslationBackgroundSupported())
+          throw new Error('无数据库模式，不支持后台手动翻译');
+        await getTranslationWorker().requestManualTranslation();
+        return jsonNoStore({ ok: true, queued: true });
+      }
+      case 'set_automatic': {
+        if (!isTranslationBackgroundSupported())
+          throw new Error('无数据库模式，不支持后台自动翻译');
+        if (typeof body.enabled !== 'boolean')
+          throw new Error('自动翻译开关必须为布尔值');
+        await setAutomaticTranslationEnabled(kv, body.enabled);
         getTranslationWorker().wake();
+        return jsonNoStore({ ok: true, automaticEnabled: body.enabled });
+      }
+      case 'set_prompt': {
+        if (body.useDefault === true) await setTranslationPrompt(kv, null);
+        else {
+          if (typeof body.prompt !== 'string') throw new Error('请填写提示词');
+          await setTranslationPrompt(kv, body.prompt);
+        }
         return jsonNoStore({ ok: true });
+      }
+      case 'translate_batch': {
+        if (!isTranslationBackgroundSupported())
+          throw new Error('无数据库模式，不支持后台手动翻译');
+        let texts: string[] = [];
+        if (Array.isArray(body.texts)) texts = body.texts.map(String);
+        else if (body.filter && typeof body.filter === 'object')
+          texts = filterItems(
+            await listAllItems(kv),
+            body.filter as ItemFilter,
+          ).map((item) => item.text);
+        const job =
+          await getTranslationWorker().requestManualTranslation(texts);
+        return jsonNoStore({
+          ok: true,
+          queued: true,
+          total: job.texts?.length ?? 0,
+        });
       }
       default:
         return jsonNoStore({ error: '未知操作' }, { status: 400 });
