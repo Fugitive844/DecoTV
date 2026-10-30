@@ -1,5 +1,7 @@
 <!-- markdownlint-disable MD033 MD026 MD034 -->
 
+> 本项目由 [Decohererk/DecoTV](https://github.com/Decohererk/DecoTV) fork 而来，在其基础上继续开发，许可证沿用原项目，详见 [LICENSE](LICENSE)。原生安卓客户端见 [Fugitive844/DecoTV-Android](https://github.com/Fugitive844/DecoTV-Android)。
+
 <h1 align="center">
   <img src="public/logo.png" alt="DecoTV Logo" width="160" style="margin-bottom: 12px;" />
   <br />
