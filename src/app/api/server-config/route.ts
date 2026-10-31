@@ -11,6 +11,7 @@ import {
   buildResolutionFilterFromSearchParams,
   formatResolutionLabel,
 } from '@/lib/video-quality';
+import { yellowWords } from '@/lib/yellow';
 
 export const runtime = 'nodejs';
 
@@ -38,6 +39,11 @@ export async function GET(request: NextRequest) {
     EnableRegistration: config.UserConfig.RegistrationEnabled,
     // 🔒 成人内容过滤状态（新增）
     AdultFilterEnabled: adultFilterEnabled,
+    // APK 本机搜索用：过滤启用时按 type_name 排除的关键词，与服务端搜索接口同一份词表。
+    // 没有这个字段的旧服务端，APK 退回服务端搜索。
+    AdultTypeWords: adultFilterEnabled ? yellowWords : [],
+    // APK 本机搜索用：每个源最多取几页，与服务端搜索一致。
+    SearchMaxPage: config.SiteConfig.SearchDownstreamMaxPage,
     // 🖼️ 登录页面背景图
     LoginBackground:
       config.SiteConfig.LoginBackground ||
