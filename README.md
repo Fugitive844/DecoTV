@@ -15,7 +15,7 @@
 ![Next.js](https://img.shields.io/badge/Next.js-16-000?logo=nextdotjs)
 ![TailwindCSS](https://img.shields.io/badge/TailwindCSS-4-38bdf8?logo=tailwindcss)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?logo=typescript)
-![License](https://img.shields.io/badge/License-MIT-green)
+![License](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey)
 ![Docker Ready](https://img.shields.io/badge/Docker-ready-blue?logo=docker)
 
 </div>
@@ -91,9 +91,14 @@
 - 🎞️ **TMDB 元数据增强**：支持与豆瓣互补的 TMDB 元数据查询，中文优先、英文回退，可为详情页和私人影库补充更稳定的海报、背景图与简介。
 - 🗂️ **私人影库**：支持接入 OpenList / 小雅 Alist / Emby / Jellyfin，在“我的影库”中浏览和播放自有媒体资源，并通过服务端代理保护流地址与鉴权信息。
 - 👿 **智能去广告**：自动跳过视频中的切片广告（实验性）。
-- 🏠 **本地无数据库模式**：无需 Redis，自动降级为浏览器 localStorage 存储。
-- 🌐 **CMS 全量代理**：根绝 Mixed Content 和 CORS 问题，支持任意第三方源。
-- 🛡️ **隐私纵深防御**：双重熔断机制，从配置到代理层隔离成人内容。
+- 🏠 **本地无数据库模式**：无需 Redis，适合快速体验；后台配置存在服务端内存，播放记录和收藏存在浏览器。
+- 🌐 **直连优先、代理兜底**：网页端优先直连播放和加载图片，遇到 CORS、Mixed Content 等限制时改走服务端代理。
+- 🛡️ **成人内容隔离**：默认过滤；只有后台关闭过滤且请求带有效访问秘钥时才放开。
+- 🔑 **访问秘钥**：站长批量生成和停用，通过 URL 参数 `ak` 控制成人内容的访问。
+- 🤖 **大模型翻译**：接入 OpenAI 兼容接口翻译直播频道名称和分组，支持额度、批量修改和实时进度。
+- 🧾 **审计日志**：后台可查看所有用户的搜索和播放记录。
+- 🧭 **源浏览器与直播搜索**：可按视频源浏览内容，并搜索直播源和频道。
+- 📲 **安卓客户端入口**：后台填写 APK 下载页后，登录页、注册页和站内右上角会显示下载按钮和二维码。
 
 ### 注意：部署后项目为空壳项目，无内置播放源和直播源，需要自行收集
 
@@ -137,7 +142,7 @@
 
 ## 🚀 部署
 
-本项目**仅支持 Docker 或其他基于 Docker 的平台** 部署。
+本文档以 **Docker 部署**为准。大模型翻译、直播频道抓取等后台任务依赖常驻进程，不适合 Serverless 平台。
 
 ### 🧩 OpenWrt 部署
 
@@ -151,7 +156,7 @@
 docker pull yangchongshun/deco-tv:latest
 ```
 
-若需在外部主机自行构建后再导入至 OpenWrt，请参考指南中的 “获取或构建镜像” 与 “导出并传输” 步骤。
+预构建镜像目前只提供 `linux/amd64`，ARM 设备需要自行构建。若需在外部主机自行构建后再导入至 OpenWrt，请参考指南中的 “获取或构建镜像” 与 “导出并传输” 步骤。
 
 ### 📦 Docker 镜像
 
@@ -270,7 +275,7 @@ services:
 
 ### 🏠 本地无数据库模式（最简部署）
 
-如果你只是想**快速体验**或**单机使用**，不需要多端同步功能，可以使用本地存储模式。此模式下数据保存在浏览器的 localStorage 中，无需任何外部数据库。
+如果你只是想**快速体验**或**单机使用**，不需要多端同步功能，可以使用本地存储模式。此模式无需任何外部数据库：后台配置保存在服务端进程内存中，播放记录和收藏保存在浏览器 localStorage 中。
 
 #### Docker Run（最简单）
 
@@ -308,7 +313,9 @@ volumes:
 | ✅ 必需配置 | `PASSWORD` - 管理员登录密码                                           |
 | ❌ 不需要   | `USERNAME`、`NEXT_PUBLIC_STORAGE_TYPE`、任何数据库连接变量            |
 | ❌ 不需要   | `AUTH_SECRET`、`AUTH_URL`（这些是其他认证框架的配置，DecoTV 不使用）  |
-| ⚠️ 数据存储 | 所有配置保存在浏览器 localStorage，清除浏览器数据会丢失配置           |
+| ⚠️ 后台配置 | 保存在服务端内存，容器重启或重建后丢失，请自行备份配置文件            |
+| ⚠️ 用户数据 | 播放记录和收藏保存在浏览器 localStorage，清除浏览器数据会丢失         |
+| ⚠️ 安全     | 为便于初次配置，此模式放宽了后台接口的登录校验，不要暴露到公网        |
 | ⚠️ 多端同步 | 不支持，每个浏览器独立存储                                            |
 | ⬇️ 下载缓存 | 建议挂载 `/app/.cache/ffmpeg-downloads`，避免容器重建时丢失已转存文件 |
 
@@ -358,7 +365,7 @@ volumes:
 
 **Q: 如何从本地模式迁移到数据库模式？**
 
-由于本地模式数据存储在浏览器中，无法直接迁移。建议：
+本地模式的数据分散在服务端内存和浏览器中，无法直接迁移。建议：
 
 1. 手动导出配置（复制配置文件内容）
 2. 部署新的数据库模式实例
@@ -366,7 +373,7 @@ volumes:
 
 ## ⚙️ 配置文件
 
-完成部署后为空壳应用，无播放源，需要站长在管理后台的配置文件设置中填写配置文件（后续会支持订阅）
+完成部署后为空壳应用，无播放源，需要站长在管理后台的 `配置文件` 中填写配置，或填写订阅地址拉取配置（要求 JSON 格式且使用 Base58 编码）；也可以在 `视频源管理`、`直播源管理` 中逐个维护
 
 配置文件示例如下：
 
@@ -424,7 +431,7 @@ dockge/komodo 等 docker compose UI 也有自动更新功能
 | 变量                  | 说明                      | 可选值                   | 默认值                                                                                                                     |
 | --------------------- | ------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
 | USERNAME              | 管理员账号                | 任意字符串               | 无默认，数据库模式**必填**，本地模式可省略                                                                                 |
-| PASSWORD              | 管理员密码                | 任意字符串               | 无默认，**必填**                                                                                                           |
+| PASSWORD              | 管理员密码                | 任意字符串               | 无默认，password 模式**必填**                                                                                              |
 | NEXT_PUBLIC_AUTH_MODE | 访问模式                  | password、public         | password                                                                                                                   |
 | PUBLIC_ALLOW_ADMIN    | public 模式下是否开放后台 | true/false               | false                                                                                                                      |
 | SITE_BASE             | 站点 URL                  | 形如 https://example.com | 空                                                                                                                         |
@@ -456,15 +463,27 @@ dockge/komodo 等 docker compose UI 也有自动更新功能
 
 ### 高级配置
 
-| 变量                                | 说明                     | 可选值     | 默认值 | 备注            |
-| ----------------------------------- | ------------------------ | ---------- | ------ | --------------- |
-| NEXT_PUBLIC_SEARCH_MAX_PAGE         | 搜索接口可拉取的最大页数 | 1-50       | 5      | 数值越大越慢    |
-| NEXT_PUBLIC_DOUBAN_PROXY_TYPE       | 豆瓣数据源请求方式       | 见下方说明 | auto   | -               |
-| NEXT_PUBLIC_DOUBAN_PROXY            | 自定义豆瓣数据代理 URL   | URL prefix | 空     | custom 模式使用 |
-| NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE | 豆瓣图片代理类型         | 见下方说明 | auto   | -               |
-| NEXT_PUBLIC_DOUBAN_IMAGE_PROXY      | 自定义豆瓣图片代理 URL   | URL prefix | 空     | custom 模式使用 |
-| NEXT_PUBLIC_DISABLE_YELLOW_FILTER   | 关闭色情内容过滤         | true/false | false  | 不建议开启      |
-| NEXT_PUBLIC_FLUID_SEARCH            | 是否开启搜索接口流式输出 | true/false | true   | -               |
+| 变量                                | 说明                             | 可选值               | 默认值           | 备注                     |
+| ----------------------------------- | -------------------------------- | -------------------- | ---------------- | ------------------------ |
+| NEXT_PUBLIC_SEARCH_MAX_PAGE         | 搜索接口可拉取的最大页数         | 1-50                 | 5                | 数值越大越慢             |
+| NEXT_PUBLIC_DOUBAN_PROXY_TYPE       | 豆瓣数据源请求方式               | 见下方说明           | auto             | -                        |
+| NEXT_PUBLIC_DOUBAN_PROXY            | 自定义豆瓣数据代理 URL           | URL prefix           | 空               | custom 模式使用          |
+| NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE | 豆瓣图片代理类型                 | 见下方说明           | auto             | -                        |
+| NEXT_PUBLIC_DOUBAN_IMAGE_PROXY      | 自定义豆瓣图片代理 URL           | URL prefix           | 空               | custom 模式使用          |
+| NEXT_PUBLIC_DISABLE_YELLOW_FILTER   | 关闭色情内容过滤                 | true/false           | false            | 不建议开启               |
+| NEXT_PUBLIC_FLUID_SEARCH            | 是否开启搜索接口流式输出         | true/false           | true             | -                        |
+| NEXT_PUBLIC_SEARCH_RESULT_LOAD_MODE | 搜索结果加载方式                 | infinite、pagination | infinite         | -                        |
+| ENABLE_AD_FILTER                    | m3u8 广告分段过滤                | true/false           | true             | 也可在后台配置           |
+| AD_FILTER_MIN_DURATION              | 广告段最短时长（秒）             | 数字                 | 3                | 改错可能误删正片         |
+| AD_FILTER_MAX_DURATION              | 广告段最长时长（秒）             | 数字                 | 120              | 改错可能误删正片         |
+| AD_FILTER_MAX_SEGMENTS              | 广告段最多分片数                 | 数字                 | 15               | 改错可能误删正片         |
+| M3U8_SERVER_PROXY                   | 是否把 m3u8 改写为服务端代理地址 | true/false           | 跟随广告过滤设置 | -                        |
+| M3U8_DIRECT_MEDIA                   | m3u8 分片是否直连上游            | true/false           | false            | 可节省服务器带宽         |
+| M3U8_PROXY_SIGNING_SECRET           | m3u8 代理地址签名密钥            | 任意字符串           | 空               | 未设置时复用 PASSWORD 等 |
+| LIVE_SOURCE_REFRESH_CONCURRENCY     | 直播源抓取全局并发               | 1-16                 | 4                | -                        |
+| SOURCE_VALIDATE_CONCURRENCY         | 视频源校验并发                   | 数字                 | 6                | -                        |
+| SOURCE_VALIDATE_TIMEOUT_MS          | 视频源校验超时（毫秒）           | 数字                 | 12000            | -                        |
+| PANSOU_PROXY_TIMEOUT_MS             | PanSou 请求超时（毫秒）          | 数字                 | 15000            | -                        |
 
 #### NEXT_PUBLIC_DOUBAN_PROXY_TYPE 可选值
 
@@ -540,11 +559,56 @@ docker run --env-file .env.docker.local -p 3000:3000 decotv
 DANDANPLAY_RELAY_URL=https://your-relay.example.com
 ```
 
-Vercel 或其他源码部署也可以使用 `DANDANPLAY_RELAY_URL` 覆盖默认中继；设为 `disabled` 时完全禁用中继回退。
+Vercel 或其他源码部署也可以使用 `DANDANPLAY_RELAY_URL` 覆盖默认中继；设为 `disabled` 时完全禁用中继回退。如果你的实例对外提供中继，可设置 `DANDANPLAY_PUBLIC_RELAY_ENABLED=false` 临时暂停，本实例的弹幕不受影响。
 
 不要将真实密钥提交到仓库、写入 `NEXT_PUBLIC_*` 环境变量、打包进公开镜像或提供给前端生成签名。弹弹play文档说明开放平台将在 **2026 年 6 月 25 日** 起启用应用分层与额度管理机制；自行部署的中继服务应开启缓存，并根据流量情况配置限流策略。
 
+#### 集成自部署弹幕服务（推荐 Docker 部署使用）
+
+官方 Docker 镜像默认不接入公共中继，最省事的做法是部署一个 [huangxd-/danmu_api](https://github.com/huangxd-/danmu_api)（LogVar 弹幕 API）。启用后，网页端和安卓客户端都通过 DecoTV 服务端获取弹幕，不需要单独配置。
+
+1. 在 Compose 中加入弹幕服务，并与 DecoTV 放在同一网络。访问令牌、数据持久化等配置见该项目的文档：
+
+   ```yml
+   services:
+     decotv-danmu:
+       image: logvar/danmu-api:latest
+       container_name: decotv-danmu
+       restart: unless-stopped
+       networks:
+         - decotv-network
+   ```
+
+2. 进入 DecoTV 后台 `弹幕配置`，启用自定义弹幕服务。
+3. 在 `服务器连接` 中填写服务器地址，例如 `http://decotv-danmu:9321`；如果弹幕服务设置了访问令牌，一并填写。
+4. 点击 `连通测试`，通过后保存。
+
+后台还可以管理多个备用节点，并设置来源平台优先级、数量限制和屏蔽词等。弹幕服务只提供读取，安卓客户端不支持发送弹幕。
+
 > 感谢 [弹弹play](https://www.dandanplay.com/) 为 DecoTV 提供弹幕服务支持！
+
+### 访问秘钥与成人内容
+
+成人内容默认过滤。要放开，必须同时满足两个条件：
+
+1. 在后台 `站点配置` 中关闭成人内容过滤。
+2. 请求 URL 带有效的访问秘钥，例如 `?ak=DKXXXX`。秘钥在后台 `访问秘钥` 中生成，停用或删除后立即失效。
+
+如果在 `访问秘钥` 中启用了“空秘钥”，不带秘钥的请求也视为通过，但仍需先关闭过滤。旧的 `adult=1`、`filter=off` 参数和 `/adult/` 路径前缀已不再放开成人内容。
+
+### 大模型翻译
+
+在后台 `大模型配置` 中添加 OpenAI 兼容的 Chat Completions 接口后，可在 `翻译缓存` 中查看和批量处理译文。任意时刻最多启用一个配置。
+
+新增配置的自动调用额度初始为 0，需要手动调整：`-1` 表示不限，`0` 表示禁止新的自动调用，正整数按实际请求次数扣减。手动翻译不扣额度。
+
+### 直播频道抓取
+
+直播频道缓存写入数据库。抓取成功后每小时刷新一次；失败后依次等待 1、5、15、60 分钟重试，之后保持 60 分钟，成功后恢复正常。
+
+### 审计日志
+
+后台 `审计日志` 记录所有用户的搜索和播放历史，每个用户最多保留 5000 条搜索记录。如果你把实例提供给其他人使用，请提前告知对方。
 
 ### 网盘搜索（PanSou）配置
 
@@ -564,7 +628,7 @@ DecoTV 支持把 TMDB 作为与豆瓣互补的第二元数据来源，尤其适�
 快速使用：
 
 1. 到 TMDB 后台申请 API Key。
-2. 在环境变量或后台 `TMDB 配置` 中填写 `TMDB_API_KEY`。
+2. 在环境变量 `TMDB_API_KEY` 或后台 `站点配置` 的 TMDB API Key 中填写。
 3. 如果部署环境无法直连 TMDB，可额外配置 `TMDB_PROXY` 或 `TMDB_REVERSE_PROXY`。
 4. 进入后台执行 `TMDB 连通性测试`，保存后即可生效。
 
@@ -588,13 +652,13 @@ OpenList 快速使用：
 剧集：三体 (2023) {tmdb-1428232}/Season 01/S01E01.mkv
 ```
 
-1. 进入后台 `私人影库` 配置区块，添加连接并选择 `OpenList`。
+1. 进入后台 `私人影库配置`，添加连接并选择 `OpenList`。
 2. 填写服务地址、Token、根路径，先测试连接，再执行扫描。
 
 小雅 Alist 快速使用：
 
 1. 准备小雅服务地址、访问密码（若实例开启了访问控制）和扫描根目录，默认根目录为 `/`。
-2. 进入后台 `私人影库` 配置区块，添加连接并选择 `小雅 Alist`。
+2. 进入后台 `私人影库配置`，添加连接并选择 `小雅 Alist`。
 3. 填写服务地址、访问密码和根目录；如实例未开启访问密码可留空，根目录可按需填写如 `/电影`。
 4. 先测试连接，再执行扫描；播放 `.strm` 文件时，服务端会实时刷新阿里云盘直链。
 
@@ -676,7 +740,7 @@ sudo chown -R 1001:1001 ./downloads
 
 - [ ] 多语言国际化支持
 - [ ] 更多数据库存储选择
-- [ ] 手机端 APP 开发
+- [x] 安卓客户端（[DecoTV Android](https://github.com/Fugitive844/DecoTV-Android)）
 - [ ] 智能推荐算法
 - [ ] 用户评分系统
 - [x] 弹幕功能（集成弹弹play弹幕库）
@@ -691,60 +755,12 @@ sudo chown -R 1001:1001 ./downloads
 **详细配置指南**：
 
 - 📖 [OrionTV 使用指南](./docs/OrionTV使用指南.md)
-- 🔒 [成人内容过滤使用指南](./docs/成人内容过滤使用指南.md) - **支持通过 URL 参数灵活控制成人内容过滤**
 
-**OrionTV 成人内容过滤快速配置**：
-
-<details>
-<summary>点击查看 OrionTV 过滤配置示例</summary>
-
-### 🎯 推荐方式：使用路径前缀
-
-#### 家庭安全模式（推荐家庭使用）
-
-```text
-API 地址: https://your-domain.com/
-```
-
-✅ 自动过滤成人资源源和敏感关键词
-
-#### 完整内容模式（成人用户）
-
-```text
-API 地址: https://your-domain.com/adult/
-```
-
-✅ 显示所有内容（包括成人资源）
-
-> 💡 **工作原理**:
->
-> - 路径前缀 `/adult/` 会被自动识别并重写
-> - 例如: `/adult/api/search` → `/api/search?adult=1`
-> - OrionTV 无需额外配置，开箱即用
-
-### 备用方式：使用 URL 参数
-
-**注意**: 此方式仅适用于 Web 端，OrionTV 可能不支持
-
-#### 家庭安全模式
-
-```text
-API 地址: https://your-domain.com
-```
-
-#### 完整内容模式
-
-```text
-API 地址: https://your-domain.com?adult=1
-```
-
-详细说明请参阅 [成人内容过滤使用指南](./docs/成人内容过滤使用指南.md)
-
-</details>
+**成人内容**：API 地址默认只返回过滤后的内容，放开方式见 [访问秘钥与成人内容](#访问秘钥与成人内容)。旧的 `/adult/` 前缀仍可访问，但不再放开成人内容。
 
 ## 🎥 TVbox 配置
 
-具体可见 [TVBox 配置优化说明](https://github.com/Decohererk/DecoTV/blob/main/TVBox%E9%85%8D%E7%BD%AE%E4%BC%98%E5%8C%96%E8%AF%B4%E6%98%8E.md) ,详细功能见/admin 管理页面 **TVbox 配置**
+具体可见 [TVBox 配置优化说明](./TVBox配置优化说明.md)，详细功能见 `/admin` 管理页面的 **TVBox 配置**
 
 ## 🧑‍💻 用户注册功能
 
@@ -792,7 +808,7 @@ NEXT_PUBLIC_STORAGE_TYPE=redis  # 或 upstash、kvrocks
 
 ## 📄 License
 
-[MIT](LICENSE) © 2025 DecoTV & Contributors
+[CC BY-NC-SA 4.0](LICENSE) © 2025 DecoTV & Contributors
 
 ## 🙏 致谢
 
@@ -807,11 +823,11 @@ NEXT_PUBLIC_STORAGE_TYPE=redis  # 或 upstash、kvrocks
 ## 📈 Star History
 
 <div align="center">
-  <a href="https://star-history.com/#Decohererk/DecoTV&Date">
+  <a href="https://star-history.com/#Fugitive844/DecoTV&Date">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Decohererk/DecoTV&type=Date&theme=dark" />
-      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Decohererk/DecoTV&type=Date" />
-      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Decohererk/DecoTV&type=Date" />
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Fugitive844/DecoTV&type=Date&theme=dark" />
+      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Fugitive844/DecoTV&type=Date" />
+      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Fugitive844/DecoTV&type=Date" />
     </picture>
   </a>
 </div>
@@ -839,6 +855,6 @@ NEXT_PUBLIC_STORAGE_TYPE=redis  # 或 upstash、kvrocks
     <strong>🌟 如果觉得项目有用，请点个 Star 支持一下！🌟</strong>
   </p>
   <p>
-    <sub>Made with ❤️ by <a href="https://github.com/Decohererk">Decohererk</a> and <a href="https://github.com/Decohererk/DecoTV/graphs/contributors">Contributors</a></sub>
+    <sub>Made with ❤️ by <a href="https://github.com/Decohererk">Decohererk</a> and <a href="https://github.com/Decohererk/DecoTV/graphs/contributors">Contributors</a>, maintained by <a href="https://github.com/Fugitive844">Fugitive844</a></sub>
   </p>
 </div>
