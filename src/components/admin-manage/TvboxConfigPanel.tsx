@@ -20,6 +20,7 @@ export default function TvboxConfigPanel() {
     'domestic',
   );
   const [tvboxJarMode, setTvboxJarMode] = useState<'proxy' | 'remote'>('proxy');
+  const [tvboxAccessKey, setTvboxAccessKey] = useState('');
   const [tvboxDoubanEnabled, setTvboxDoubanEnabled] = useState(true);
   const [diagnosisResult, setDiagnosisResult] = useState<any>(null);
   const [isDiagnosing, setIsDiagnosing] = useState(false);
@@ -512,12 +513,12 @@ export default function TvboxConfigPanel() {
                     成人内容过滤
                   </h4>
                   <p className='text-xs text-gray-500 dark:text-gray-400'>
-                    无需修改配置，通过 URL 参数灵活控制
+                    默认过滤；后台关闭过滤后，凭访问秘钥放开
                   </p>
                 </div>
               </div>
               <a
-                href='https://github.com/Decohererk/DecoTV/blob/main/docs/%E6%88%90%E4%BA%BA%E5%86%85%E5%AE%B9%E8%BF%87%E6%BB%A4%E4%BD%BF%E7%94%A8%E6%8C%87%E5%8D%97.md'
+                href='https://github.com/Fugitive844/DecoTV/blob/main/docs/%E6%88%90%E4%BA%BA%E5%86%85%E5%AE%B9%E8%BF%87%E6%BB%A4%E4%BD%BF%E7%94%A8%E6%8C%87%E5%8D%97.md'
                 target='_blank'
                 rel='noopener noreferrer'
                 className='text-xs text-pink-600 dark:text-pink-400 hover:underline flex items-center gap-1'
@@ -538,6 +539,14 @@ export default function TvboxConfigPanel() {
                 </svg>
               </a>
             </div>
+
+            <input
+              type='text'
+              value={tvboxAccessKey}
+              onChange={(e) => setTvboxAccessKey(e.target.value)}
+              placeholder='完整内容模式需要的访问秘钥（DK 开头）'
+              className='w-full mb-3 px-3 py-2 text-sm font-mono bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-900 dark:text-gray-100'
+            />
 
             <div className='grid grid-cols-1 sm:grid-cols-2 gap-3'>
               <button
@@ -570,11 +579,16 @@ export default function TvboxConfigPanel() {
 
               <button
                 onClick={() => {
+                  const accessKey = tvboxAccessKey.trim();
+                  if (!accessKey) {
+                    showError('请先填写访问秘钥', showAlert);
+                    return;
+                  }
                   navigator.clipboard.writeText(
-                    getTvboxConfigUrlWithParam('filter', 'off'),
+                    getTvboxConfigUrlWithParam('ak', accessKey),
                   );
                   showSuccess(
-                    '已复制完整内容模式链接（显示所有内容）',
+                    '已复制完整内容模式链接（需在站点配置中关闭成人内容过滤才生效）',
                     showAlert,
                   );
                 }}
@@ -589,12 +603,12 @@ export default function TvboxConfigPanel() {
                       完整内容模式
                     </div>
                     <div className='text-xs text-gray-500 dark:text-gray-400'>
-                      显示所有内容资源
+                      需关闭过滤并带有效访问秘钥
                     </div>
                   </div>
                 </div>
                 <span className='text-xs font-mono bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded text-gray-500'>
-                  ?filter=off
+                  ?ak=秘钥
                 </span>
               </button>
             </div>

@@ -37,7 +37,7 @@ export enum UpdateStatus {
 }
 
 // 远程版本源配置
-const UPDATE_REPO = process.env.NEXT_PUBLIC_UPDATE_REPO || 'Decohererk/DecoTV';
+const UPDATE_REPO = process.env.NEXT_PUBLIC_UPDATE_REPO || 'Fugitive844/DecoTV';
 const UPDATE_REF = process.env.NEXT_PUBLIC_UPDATE_REF || 'main';
 
 // 多个镜像源，确保至少一个能访问

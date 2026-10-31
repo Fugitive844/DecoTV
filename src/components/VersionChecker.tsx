@@ -226,7 +226,7 @@ export default function VersionChecker() {
 
             <a
               href={
-                remote.downloadUrl || 'https://github.com/Decohererk/DecoTV'
+                remote.downloadUrl || 'https://github.com/Fugitive844/DecoTV'
               }
               target='_blank'
               rel='noopener noreferrer'
