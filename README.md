@@ -127,7 +127,6 @@
 - [📄 License](#-license)
 - [🙏 致谢](#-致谢)
 - [📈 Star History](#-star-history)
-- [💝 赞赏支持](#-赞赏支持)
 
 ## 🛠 技术栈
 
@@ -756,7 +755,7 @@ sudo chown -R 1001:1001 ./downloads
 
 - 📖 [OrionTV 使用指南](./docs/OrionTV使用指南.md)
 
-**成人内容**：API 地址默认只返回过滤后的内容，放开方式见 [访问秘钥与成人内容](#访问秘钥与成人内容)。旧的 `/adult/` 前缀仍可访问，但不再放开成人内容。
+**成人内容**：API 地址默认只返回过滤后的内容，放开方式见 [访问秘钥与成人内容](#访问秘钥与成人内容) 和 [成人内容过滤使用指南](./docs/成人内容过滤使用指南.md)。
 
 ## 🎥 TVbox 配置
 
@@ -830,22 +829,6 @@ NEXT_PUBLIC_STORAGE_TYPE=redis  # 或 upstash、kvrocks
       <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Fugitive844/DecoTV&type=Date" />
     </picture>
   </a>
-</div>
-
-## 💝 赞赏支持
-
-如果这个项目对你有所帮助，欢迎 Star ⭐ 本项目或请作者喝杯咖啡 ☕
-
-<div align="center">
-  <table>
-    <tr>
-      <td align="center">
-        <img src="public/wechat.jpg" alt="微信赞赏" width="200">
-        <br>
-        <sub><b>🎨 微信赞赏</b></sub>
-      </td>
-    </tr>
-  </table>
 </div>
 
 ---

@@ -100,12 +100,6 @@ https://your-domain.com/quality/1080
 
 DecoTV 会将后续 API 自动重写为 `minResolution=720` 或 `minResolution=1080`。默认只过滤已识别且低于门槛的结果，未知清晰度会保留，避免误伤没有标注清晰度但实际可播放的源。
 
-也可以与成人模式组合：
-
-```text
-https://your-domain.com/adult/quality/1080
-```
-
 显式接口参数同样支持：
 
 ```http

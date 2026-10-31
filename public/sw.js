@@ -231,7 +231,6 @@ define(['./workbox-e9849328'], function (e) {
           url: '/screenshot2.png',
           revision: 'bfc965d7b65b271fc1661a4384dabc9e',
         },
-        { url: '/wechat.jpg', revision: 'd0f601311802667cd6ca5a37dc69bfa7' },
       ],
       { ignoreURLParametersMatching: [] },
     ),
