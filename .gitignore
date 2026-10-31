@@ -47,6 +47,8 @@ sitemap-*.xml
 src/lib/runtime.ts
 public/manifest.json
 
-# Local test credentials and private import datasets
-/docs/需求与部署/测试交接-本机私密.md
-/docs/imports/
+# Local deployment docs, requirement docs and private datasets
+/deploy/
+
+# IDE
+/.idea/

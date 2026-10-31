@@ -10,5 +10,5 @@ coverage
 *.log
 *.tsbuildinfo
 docker-compose*.yml
-docs/imports
+deploy
 **/*本机私密*
