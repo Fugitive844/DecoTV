@@ -47,14 +47,6 @@ export default function IpLocationCells({
         ) : (
           <span className='font-mono'>{location?.ip || empty}</span>
         )}
-        {location?.source === 'nginx-backfill' && (
-          <span
-            className='ml-2 text-xs text-amber-600'
-            title='历史日志回填：依据 Nginx 请求时间推断，使用当前地理数据库解析'
-          >
-            回填
-          </span>
-        )}
       </td>
       <td className={cellClass}>{location?.country || empty}</td>
       <td className={cellClass}>
