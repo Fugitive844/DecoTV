@@ -12,3 +12,9 @@ coverage
 docker-compose*.yml
 deploy
 **/*本机私密*
+
+data/geoip
+
+.claude
+.swc
+.vscode

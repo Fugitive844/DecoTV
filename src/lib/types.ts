@@ -1,4 +1,5 @@
 import { AdminConfig } from './admin.types';
+import type { IpLocation } from './ip-location.types';
 import type { LiveChannelCacheRecord } from './live-cache.types';
 
 // 播放记录数据结构
@@ -17,6 +18,7 @@ export interface PlayRecord {
 
 // 播放审计记录：同一用户同一视频（source+id）只保留一条，用户删除播放记录不影响
 export interface PlayAuditEntry extends PlayRecord {
+  location?: IpLocation;
   key: string; // source+id
   source: string;
   id: string;
@@ -26,6 +28,7 @@ export interface PlayAuditEntry extends PlayRecord {
 
 // 搜索审计记录：每次搜索一条
 export interface SearchAuditEntry {
+  location?: IpLocation;
   keyword: string;
   time: number;
 }
@@ -141,9 +144,14 @@ export interface IStorage {
     userName: string,
     key: string,
     record: PlayRecord,
+    location?: IpLocation,
   ): Promise<void>;
   getPlayAudits?(userName: string): Promise<PlayAuditEntry[]>;
-  addSearchAudit?(userName: string, keyword: string): Promise<void>;
+  addSearchAudit?(
+    userName: string,
+    keyword: string,
+    location?: IpLocation,
+  ): Promise<void>;
   getSearchAudits?(
     userName: string,
     offset: number,

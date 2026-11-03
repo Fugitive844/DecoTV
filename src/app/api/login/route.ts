@@ -10,6 +10,7 @@ import {
 import { isPublicMode } from '@/lib/auth-mode';
 import { getConfig } from '@/lib/config';
 import { db } from '@/lib/db';
+import { captureRequestIp } from '@/lib/request-ip';
 import { getEffectiveRequestOrigin } from '@/lib/request-protocol';
 
 export const runtime = 'nodejs';
@@ -165,6 +166,9 @@ export async function POST(req: NextRequest) {
       username === process.env.USERNAME &&
       password === process.env.PASSWORD
     ) {
+      await captureRequestIp(username, req).catch((error) =>
+        console.error('记录登录 IP 失败', error),
+      );
       // 验证成功，设置认证cookie
       const response = NextResponse.json({ ok: true });
       const cookieValue = await generateAuthCookie(
@@ -202,6 +206,9 @@ export async function POST(req: NextRequest) {
         );
       }
 
+      await captureRequestIp(username, req).catch((error) =>
+        console.error('记录登录 IP 失败', error),
+      );
       // 验证成功，设置认证cookie
       const response = NextResponse.json({ ok: true });
       const cookieValue = await generateAuthCookie(

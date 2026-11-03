@@ -1,5 +1,4 @@
 /* eslint-disable no-console, @typescript-eslint/no-explicit-any */
-
 import { Redis } from '@upstash/redis';
 
 import { AdminConfig } from './admin.types';
@@ -13,6 +12,7 @@ import {
   searchAuditKey,
   sortPlayAudits,
 } from './audit';
+import type { IpLocation } from './ip-location.types';
 import { COMPARE_AND_SET_SCRIPT } from './kv-scripts.mjs';
 import type { LiveChannelCacheRecord } from './live-cache.types';
 import {
@@ -514,12 +514,19 @@ export class UpstashRedisStorage implements IStorage {
     userName: string,
     key: string,
     record: PlayRecord,
+    location?: IpLocation,
   ): Promise<void> {
     const hashKey = playAuditKey(userName);
     const previous = parseAuditValue<PlayAuditEntry>(
       await withRetry(() => this.client.hget(hashKey, key)),
     );
-    const entry = buildPlayAuditEntry(key, record, previous);
+    const entry = buildPlayAuditEntry(
+      key,
+      record,
+      previous,
+      Date.now(),
+      location,
+    );
     await withRetry(() =>
       this.client.hset(hashKey, { [key]: JSON.stringify(entry) }),
     );
@@ -536,9 +543,13 @@ export class UpstashRedisStorage implements IStorage {
     return sortPlayAudits(entries);
   }
 
-  async addSearchAudit(userName: string, keyword: string): Promise<void> {
+  async addSearchAudit(
+    userName: string,
+    keyword: string,
+    location?: IpLocation,
+  ): Promise<void> {
     const listKey = searchAuditKey(userName);
-    const entry = buildSearchAuditEntry(keyword);
+    const entry = buildSearchAuditEntry(keyword, Date.now(), location);
     await withRetry(() => this.client.lpush(listKey, JSON.stringify(entry)));
     await withRetry(() =>
       this.client.ltrim(listKey, 0, SEARCH_AUDIT_LIMIT - 1),

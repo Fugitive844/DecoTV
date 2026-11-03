@@ -1,10 +1,10 @@
 /* eslint-disable no-console */
-
 import { NextRequest, NextResponse } from 'next/server';
 
 import { getAuthInfoFromCookie, verifyApiAuth } from '@/lib/auth';
 import { getConfig } from '@/lib/config';
 import { db } from '@/lib/db';
+import { captureRequestIp } from '@/lib/request-ip';
 
 export const runtime = 'nodejs';
 
@@ -92,7 +92,8 @@ export async function POST(request: NextRequest) {
 
     // 合规审计：每次搜索一条，用户删除搜索历史不影响；失败不影响正常保存
     try {
-      await db.addSearchAudit(auth.username, keyword);
+      const location = await captureRequestIp(auth.username, request);
+      await db.addSearchAudit(auth.username, keyword, location);
     } catch (auditError) {
       console.error('写入搜索审计失败', auditError);
     }

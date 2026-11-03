@@ -1,10 +1,10 @@
 /* eslint-disable no-console */
-
 import { NextRequest, NextResponse } from 'next/server';
 
 import { getAuthInfoFromCookie, verifyApiAuth } from '@/lib/auth';
 import { getConfig } from '@/lib/config';
 import { db } from '@/lib/db';
+import { captureRequestIp } from '@/lib/request-ip';
 import { PlayRecord } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -144,7 +144,13 @@ export async function POST(request: NextRequest) {
 
     // 合规审计：独立保存，用户删除播放记录不影响；失败不影响正常保存
     try {
-      await db.upsertPlayAudit(auth.username, `${source}+${id}`, savedRecord);
+      const location = await captureRequestIp(auth.username, request);
+      await db.upsertPlayAudit(
+        auth.username,
+        `${source}+${id}`,
+        savedRecord,
+        location,
+      );
     } catch (auditError) {
       console.error('Failed to write play audit', auditError);
     }

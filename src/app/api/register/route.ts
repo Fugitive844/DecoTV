@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { persistAdminConfigMutation } from '@/lib/admin-config-mutation';
 import { getConfig } from '@/lib/config';
 import { db } from '@/lib/db';
+import { captureRequestIp } from '@/lib/request-ip';
 
 export const runtime = 'nodejs';
 
@@ -324,6 +325,9 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    await captureRequestIp(username, req).catch((error) =>
+      console.error('记录注册 IP 失败', error),
+    );
     console.log(`新用户注册成功: ${username}`);
 
     return NextResponse.json({

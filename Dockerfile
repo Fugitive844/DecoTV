@@ -38,6 +38,9 @@ ENV NEXT_PUBLIC_BUILD_COMMIT_SHA=${GIT_COMMIT_SHA}
 ENV NEXT_PUBLIC_BUILD_COMMIT_DATE=${GIT_COMMIT_DATE}
 ENV NEXT_PUBLIC_BUILD_REF=${GIT_REF_NAME}
 
+# 下载并校验 GeoIP 数据库，运行时查询不依赖外网。
+RUN pnpm geoip:update
+
 # 生成生产构建
 RUN pnpm run build
 
@@ -70,6 +73,7 @@ ENV NEXT_PUBLIC_BUILD_REF=${GIT_REF_NAME}
 
 # 从构建器中复制 standalone 输出
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/data/geoip ./data/geoip
 # 从构建器中复制 scripts 目录
 COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
 # 从构建器中复制 start.js

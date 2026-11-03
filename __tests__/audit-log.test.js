@@ -187,6 +187,7 @@ describe('audit routes', () => {
       'alice',
       'src+1',
       expect.objectContaining({ title: '流浪地球' }),
+      expect.objectContaining({ ip: '' }),
     );
   });
 
@@ -233,7 +234,11 @@ describe('audit routes', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(mockDb.addSearchAudit).toHaveBeenCalledWith('alice', '三体');
+    expect(mockDb.addSearchAudit).toHaveBeenCalledWith(
+      'alice',
+      '三体',
+      expect.objectContaining({ ip: '' }),
+    );
   });
 
   it('only allows the owner to read audit logs', async () => {

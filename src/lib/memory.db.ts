@@ -1,5 +1,4 @@
 /* eslint-disable no-console, @typescript-eslint/no-non-null-assertion */
-
 /**
  * 内存存储实现 - 用于本地模式（无 Redis/Upstash/KVRocks）
  *
@@ -7,7 +6,6 @@
  * 注意：服务器重启后数据会丢失，但配合前端 localStorage 使用时，
  * 前端会在管理页面加载时通过 API 同步配置到后端内存。
  */
-
 import { AdminConfig } from './admin.types';
 import {
   buildPlayAuditEntry,
@@ -15,6 +13,7 @@ import {
   SEARCH_AUDIT_LIMIT,
   sortPlayAudits,
 } from './audit';
+import type { IpLocation } from './ip-location.types';
 import type { LiveChannelCacheRecord } from './live-cache.types';
 import {
   Favorite,
@@ -372,6 +371,7 @@ export class MemoryStorage implements IStorage {
     userName: string,
     key: string,
     record: PlayRecord,
+    location?: IpLocation,
   ): Promise<void> {
     if (!this.playAudits.has(userName)) {
       this.playAudits.set(userName, new Map());
@@ -379,7 +379,13 @@ export class MemoryStorage implements IStorage {
     const userAudits = this.playAudits.get(userName)!;
     userAudits.set(
       key,
-      buildPlayAuditEntry(key, record, userAudits.get(key) || null),
+      buildPlayAuditEntry(
+        key,
+        record,
+        userAudits.get(key) || null,
+        Date.now(),
+        location,
+      ),
     );
   }
 
@@ -388,9 +394,13 @@ export class MemoryStorage implements IStorage {
     return userAudits ? sortPlayAudits(Array.from(userAudits.values())) : [];
   }
 
-  async addSearchAudit(userName: string, keyword: string): Promise<void> {
+  async addSearchAudit(
+    userName: string,
+    keyword: string,
+    location?: IpLocation,
+  ): Promise<void> {
     const list = this.searchAudits.get(userName) || [];
-    list.unshift(buildSearchAuditEntry(keyword));
+    list.unshift(buildSearchAuditEntry(keyword, Date.now(), location));
     this.searchAudits.set(userName, list.slice(0, SEARCH_AUDIT_LIMIT));
   }
 

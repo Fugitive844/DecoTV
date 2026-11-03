@@ -1,3 +1,4 @@
+import type { IpLocation } from './ip-location.types';
 import { PlayAuditEntry, PlayRecord, SearchAuditEntry } from './types';
 
 // 每个用户最多保留的搜索审计条数
@@ -22,6 +23,7 @@ export function buildPlayAuditEntry(
   record: PlayRecord,
   previous: PlayAuditEntry | null,
   now = Date.now(),
+  location?: IpLocation,
 ): PlayAuditEntry {
   const separator = key.indexOf('+');
   const source = separator >= 0 ? key.slice(0, separator) : key;
@@ -30,6 +32,7 @@ export function buildPlayAuditEntry(
 
   return {
     ...record,
+    location,
     key,
     source,
     id,
@@ -41,8 +44,9 @@ export function buildPlayAuditEntry(
 export function buildSearchAuditEntry(
   keyword: string,
   now = Date.now(),
+  location?: IpLocation,
 ): SearchAuditEntry {
-  return { keyword, time: now };
+  return { keyword, time: now, location };
 }
 
 // upstash 等客户端可能已自动反序列化 JSON

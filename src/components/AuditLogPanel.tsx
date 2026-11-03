@@ -5,6 +5,10 @@ import { useCallback, useEffect, useState } from 'react';
 
 import type { PlayAuditEntry, SearchAuditEntry } from '@/lib/types';
 
+import IpLocationCells, {
+  IpLocationHeaders,
+} from '@/components/IpLocationDisplay';
+
 interface AuditUserSummary {
   username: string;
   playCount: number;
@@ -228,6 +232,7 @@ const AuditLogPanel = () => {
                 <th className='px-3 py-2 whitespace-nowrap'>进度</th>
                 <th className='px-3 py-2 whitespace-nowrap'>首次观看</th>
                 <th className='px-3 py-2 whitespace-nowrap'>最近观看</th>
+                <IpLocationHeaders />
                 <th className='px-3 py-2'>操作</th>
               </tr>
             </thead>
@@ -235,7 +240,7 @@ const AuditLogPanel = () => {
               {plays.length === 0 && (
                 <tr>
                   <td
-                    colSpan={showUserColumn ? 8 : 7}
+                    colSpan={showUserColumn ? 12 : 11}
                     className='px-3 py-4 text-center text-gray-500 dark:text-gray-400'
                   >
                     {loading ? '加载中...' : '暂无播放审计'}
@@ -279,6 +284,7 @@ const AuditLogPanel = () => {
                   <td className='px-3 py-2 whitespace-nowrap'>
                     {formatDateTime(entry.last_play_time)}
                   </td>
+                  <IpLocationCells location={entry.location} />
                   <td className='px-3 py-2'>
                     <a
                       href={buildReplayUrl(entry)}
@@ -308,13 +314,14 @@ const AuditLogPanel = () => {
                     <th className='px-3 py-2 whitespace-nowrap'>用户</th>
                   )}
                   <th className='px-3 py-2'>关键词</th>
+                  <IpLocationHeaders />
                 </tr>
               </thead>
               <tbody className='divide-y divide-gray-200 dark:divide-gray-700 text-gray-900 dark:text-gray-100'>
                 {searches.length === 0 && (
                   <tr>
                     <td
-                      colSpan={showUserColumn ? 3 : 2}
+                      colSpan={showUserColumn ? 7 : 6}
                       className='px-3 py-4 text-center text-gray-500 dark:text-gray-400'
                     >
                       {loading ? '加载中...' : '暂无搜索审计'}
@@ -335,6 +342,7 @@ const AuditLogPanel = () => {
                       </td>
                     )}
                     <td className='px-3 py-2 break-all'>{entry.keyword}</td>
+                    <IpLocationCells location={entry.location} />
                   </tr>
                 ))}
               </tbody>

@@ -39,6 +39,7 @@ import {
 } from '@/lib/admin.types';
 import { normalizeApkDownloadUrl } from '@/lib/apk-download';
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
+import type { UserIpEntry } from '@/lib/ip-location.types';
 import { getLiveSourceSortOrder } from '@/lib/live-source-options';
 
 import {
@@ -52,6 +53,10 @@ import {
   useAlertModal,
   useLoadingState,
 } from '@/components/admin-manage/admin-shared';
+import IpLocationCells, {
+  IpLocationHeaders,
+} from '@/components/IpLocationDisplay';
+import { UserIpHistory } from '@/components/UserIpHistory';
 
 // 用户配置组件
 interface UserConfigProps {
@@ -67,6 +72,30 @@ export const UserConfig = ({
   storageMode,
   refreshConfig,
 }: UserConfigProps) => {
+  const [latestIps, setLatestIps] = useState<
+    Record<string, UserIpEntry | null>
+  >({});
+  const [ipHistoryUser, setIpHistoryUser] = useState<string | null>(null);
+  const [ipError, setIpError] = useState('');
+  useEffect(() => {
+    if (storageMode === 'local') return;
+    const controller = new AbortController();
+    setIpError('');
+    fetch('/api/admin/user-ips', {
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || '读取用户 IP 失败');
+        return data;
+      })
+      .then((data) => setLatestIps(data.latest || {}))
+      .catch((err) => {
+        if (!controller.signal.aborted) setIpError(err.message);
+      });
+    return () => controller.abort();
+  }, [config, storageMode]);
   const { alertModal, showAlert, hideAlert } = useAlertModal();
   const { isLoading, withLoading } = useLoadingState();
   const [showAddUserForm, setShowAddUserForm] = useState(false);
@@ -827,6 +856,14 @@ export const UserConfig = ({
         </div>
       </div>
 
+      {ipError && <p className='text-sm text-red-500'>{ipError}</p>}
+      {ipHistoryUser && (
+        <UserIpHistory
+          key={ipHistoryUser}
+          username={ipHistoryUser}
+          onClose={() => setIpHistoryUser(null)}
+        />
+      )}
       {/* 用户列表 */}
       <div>
         <div className='flex items-center justify-between mb-3'>
@@ -1041,6 +1078,13 @@ export const UserConfig = ({
                 >
                   用户名
                 </th>
+                <IpLocationHeaders
+                  ipLabel='最近 IP'
+                  className='px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400'
+                />
+                <th className='whitespace-nowrap px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400'>
+                  最近出现
+                </th>
                 <th
                   scope='col'
                   className='px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider'
@@ -1135,6 +1179,33 @@ export const UserConfig = ({
                         </td>
                         <td className='px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 dark:text-gray-100'>
                           {user.username}
+                        </td>
+                        <IpLocationCells
+                          location={latestIps[user.username]}
+                          className='px-3 py-4 text-sm text-gray-900 dark:text-gray-100'
+                          hidden={
+                            storageMode === 'local' ||
+                            !(
+                              role === 'owner' ||
+                              user.role === 'user' ||
+                              user.username === currentUsername
+                            )
+                          }
+                          onIpClick={
+                            storageMode !== 'local' &&
+                            (role === 'owner' ||
+                              user.role === 'user' ||
+                              user.username === currentUsername)
+                              ? () => setIpHistoryUser(user.username)
+                              : undefined
+                          }
+                        />
+                        <td className='whitespace-nowrap px-3 py-4 text-xs text-gray-500'>
+                          {latestIps[user.username]
+                            ? new Date(
+                                latestIps[user.username]!.lastSeen,
+                              ).toLocaleString('zh-CN')
+                            : '—'}
                         </td>
                         <td className='px-6 py-4 whitespace-nowrap'>
                           <span

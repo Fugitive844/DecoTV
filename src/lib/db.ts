@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-
 import { AdminConfig } from './admin.types';
+import type { IpLocation } from './ip-location.types';
 import { KvrocksStorage } from './kvrocks.db';
 import type { LiveChannelCacheRecord } from './live-cache.types';
 import { MemoryStorage } from './memory.db';
@@ -351,9 +351,10 @@ export class DbManager {
     userName: string,
     key: string,
     record: PlayRecord,
+    location?: IpLocation,
   ): Promise<void> {
     if (typeof this.storage.upsertPlayAudit === 'function') {
-      await this.storage.upsertPlayAudit(userName, key, record);
+      await this.storage.upsertPlayAudit(userName, key, record, location);
     }
   }
 
@@ -364,9 +365,13 @@ export class DbManager {
     return [];
   }
 
-  async addSearchAudit(userName: string, keyword: string): Promise<void> {
+  async addSearchAudit(
+    userName: string,
+    keyword: string,
+    location?: IpLocation,
+  ): Promise<void> {
     if (typeof this.storage.addSearchAudit === 'function') {
-      await this.storage.addSearchAudit(userName, keyword);
+      await this.storage.addSearchAudit(userName, keyword, location);
     }
   }
 
