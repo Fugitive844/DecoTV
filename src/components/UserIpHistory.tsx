@@ -84,7 +84,7 @@ export function UserIpHistory({
             {error}
           </p>
         )}
-        <div className='overflow-x-auto'>
+        <div className='admin-table-scroll max-w-full overflow-x-auto'>
           <table className='w-full text-left text-sm'>
             <thead>
               <tr>

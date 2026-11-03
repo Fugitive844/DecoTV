@@ -991,6 +991,44 @@ html.dark .glass-card {
   display: none; /* Chrome, Safari, Opera */
 }
 
+/* 管理表格超出容器时保留可见滚动条，避免宽表右侧内容无法发现。 */
+.admin-table-scroll {
+  scrollbar-width: auto;
+  scrollbar-color: #94a3b8 #e2e8f0;
+}
+
+.admin-table-scroll::-webkit-scrollbar {
+  display: block;
+  width: 10px;
+  height: 10px;
+}
+
+.admin-table-scroll::-webkit-scrollbar-track {
+  background: #e2e8f0;
+  border-radius: 5px;
+}
+
+.admin-table-scroll::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 5px;
+}
+
+.admin-table-scroll::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+.dark .admin-table-scroll {
+  scrollbar-color: #64748b #1e293b;
+}
+
+.dark .admin-table-scroll::-webkit-scrollbar-track {
+  background: #1e293b;
+}
+
+.dark .admin-table-scroll::-webkit-scrollbar-thumb {
+  background: #64748b;
+}
+
 /* View Transitions API 动画 */
 @keyframes slide-from-top {
   from {

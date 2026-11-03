@@ -169,7 +169,7 @@ const AuditLogPanel = () => {
     }`;
 
   return (
-    <div className='space-y-4'>
+    <div className='min-w-0 max-w-full space-y-4'>
       <p className='text-sm text-gray-600 dark:text-gray-400'>
         记录所有用户的搜索与播放行为，用户删除自己的历史或账号被删除时，审计日志仍保留。
         同一用户同一视频只保留一条播放审计并随观看更新。“继续播放”为审计回放，不会产生任何记录。
@@ -219,7 +219,7 @@ const AuditLogPanel = () => {
       )}
 
       {view === 'play' && (
-        <div className='border border-gray-200 dark:border-gray-700 rounded-lg max-h-112 overflow-auto'>
+        <div className='admin-table-scroll max-w-full border border-gray-200 dark:border-gray-700 rounded-lg max-h-112 overflow-auto'>
           <table className='min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm'>
             <thead className='bg-gray-50 dark:bg-gray-900 sticky top-0 z-10'>
               <tr className='text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase'>
@@ -305,7 +305,7 @@ const AuditLogPanel = () => {
 
       {view === 'search' && (
         <div className='space-y-2'>
-          <div className='border border-gray-200 dark:border-gray-700 rounded-lg max-h-112 overflow-auto'>
+          <div className='admin-table-scroll max-w-full border border-gray-200 dark:border-gray-700 rounded-lg max-h-112 overflow-auto'>
             <table className='min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm'>
               <thead className='bg-gray-50 dark:bg-gray-900 sticky top-0 z-10'>
                 <tr className='text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase'>

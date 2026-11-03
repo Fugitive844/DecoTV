@@ -1042,7 +1042,7 @@ export const UserConfig = ({
 
         {/* 用户列表 */}
         <div
-          className='border border-gray-200 dark:border-gray-700 rounded-lg max-h-112 overflow-y-auto overflow-x-auto relative'
+          className='admin-table-scroll max-w-full border border-gray-200 dark:border-gray-700 rounded-lg max-h-112 overflow-y-auto overflow-x-auto relative'
           data-table='user-list'
         >
           <table className='min-w-full divide-y divide-gray-200 dark:divide-gray-700'>
